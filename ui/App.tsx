@@ -76,6 +76,11 @@ function App() {
   const [error, setError] = useState('');
   const [mode, setMode] = useState('…');
   const [meta, setMeta] = useState('');
+  // Clickjacking guard: the settings panel holds the visitor's OpenRouter key,
+  // so a framed page must not offer it. Meta CSP cannot enforce
+  // frame-ancestors (browsers ignore it there); the server header covers the
+  // Bun-served page, and this bust + hide covers the static Pages build.
+  const [framed, setFramed] = useState(false);
 
   const navigate = useCallback((href: string) => {
     if (!(href === '/' || href.startsWith('/view?') || href.startsWith('/search?'))) return;
@@ -119,6 +124,18 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
+    let isFramed = false;
+    try {
+      isFramed = window.self !== window.top;
+    } catch {
+      isFramed = true;
+    }
+    if (isFramed) {
+      try {
+        window.top!.location.href = window.location.href;
+      } catch { /* bust blocked (e.g. sandboxed): fall through and hide key UI */ }
+      setFramed(true);
+    }
     const pop = () => { setRoute(relativePath() + location.search); setReload(n => n + 1); };
     addEventListener('popstate', pop);
     return () => removeEventListener('popstate', pop);
@@ -187,13 +204,13 @@ function App() {
         <button className="wordmark" onClick={() => navigate('/')}>◈ AgentWorld</button>
         <span className="topline-right">
           <span className={`mode ${mode === 'mock' ? 'mock' : ''}`}>{badge}</span>
-          <button
+          {!framed && <button
             className={`gear ${settingsOpen ? 'active' : ''}`}
             title="OpenRouter settings"
             aria-label="OpenRouter settings"
             aria-expanded={settingsOpen}
             onClick={() => setSettingsOpen(open => !open)}
-          >⚙</button>
+          >⚙</button>}
         </span>
       </div>
       <div className="toolbar">
@@ -207,7 +224,7 @@ function App() {
         </form>
       </div>
       <SettingsPanel
-        open={settingsOpen}
+        open={settingsOpen && !framed}
         settings={settings}
         transportKind={transport?.kind ?? null}
         onChange={next => setSettings(next)}
@@ -215,6 +232,7 @@ function App() {
       />
     </header>
     <div className="disclaimer">FICTIONAL INTERNET — generated observations, not real websites or verified facts.</div>
+    {framed && <div className="disclaimer framed-warning" role="alert">此頁面被嵌入於 iframe，已停用 OpenRouter 設定以保護你的 API key。請在新分頁直接開啟使用。</div>}
     <main>
       {route === '/' && <section className="welcome">
         <span className="eyebrow">JEV × JSON-RENDER × YOUR LLM</span>

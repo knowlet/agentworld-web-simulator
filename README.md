@@ -175,6 +175,10 @@ REQUEST_TIMEOUT_MS=120000
 
 瀏覽器模式跑同一條 pipeline：Zod 驗證 → atomic candidates → 官方 `experimental_composeSpec` → catalog 驗證 → renderer；只是 provider 改由頁端呼叫、持久層換成 `localStorage`。金鑰存在使用者瀏覽器中，公開站請自行評估（建議低額度、可隨時撤銷的金鑰）；伺服器模式完全不接觸這個金鑰。
 
+瀏覽器模式的 Jev 走 `choice-chat`：任何 OpenAI-compatible chat 模型直接回答 Choice 題（選項嚴格限定在 catalog 內，錯誤直接拒絕不 fallback）。伺服器模式預設仍是 System One decisions（`JEV_PROTOCOL=systemone`；TypeSafe `/systemone` 或 OpenRouter `/decisions` 由 `JEV_PATH` 切換）。
+
+防嵌入：伺服器回應標頭保留 `frame-ancestors 'none'`；靜態站沒有回應標頭，改由頁面載入時嘗試破框、失敗時隱藏 ⚙ 與設定面板並顯示警告（meta CSP 的 `frame-ancestors` 瀏覽器會忽略，故不放）。
+
 ## GitHub Pages 部署
 
 `Deploy GitHub Pages (static browser build)` workflow 在 push `develop` 時：以 `BASE_PATH=/<repo>/` 建置靜態 bundle（`__BASE__` 進 bundle、asset 路徑改寫）→ 複製 `index.html` 為 `404.html`（SPA fallback）→ `actions/deploy-pages`。完成後網址為 `https://<owner>.github.io/<repo>/`。

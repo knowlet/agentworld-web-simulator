@@ -24,8 +24,7 @@ jobs:
           bun-version: '1.4.2'
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
-      - name: Verify pinned official json-render Jev preview
-        run: bun run verify:json-render
+      # No standalone verify step: `bun run build` runs verify:json-render first.
       - name: Type check
         run: bun run typecheck
       - name: Build static bundle for the project subpath

@@ -10,7 +10,8 @@ function normalizeBase(raw: string | undefined): string {
   let base = (raw ?? '/').trim() || '/';
   if (!base.startsWith('/')) base = '/' + base;
   if (!base.endsWith('/')) base += '/';
-  if (base.includes('..') || base.includes('//')) throw new Error(`Invalid BASE_PATH: ${raw}`);
+  // Reject only real ".." path segments (a repo literally named "foo..bar" is fine).
+  if (base.split('/').includes('..') || base.includes('//')) throw new Error(`Invalid BASE_PATH: ${raw}`);
   return base;
 }
 const base = normalizeBase(process.env.BASE_PATH);

@@ -30,15 +30,18 @@ export function SettingsPanel({ open, settings, transportKind, onChange, onClose
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const saved = saveSettings(draft);
-    onChange(saved);
-    setStatus('已儲存（僅存於此瀏覽器）');
+    onChange(saved.settings);
+    setStatus(saved.persisted
+      ? '已儲存（僅存於此瀏覽器）'
+      : '已套用於本次瀏覽，但瀏覽器拒絕寫入儲存 —— 下次開啟需重填');
   };
   const loadModels = async () => {
     setLoadingModels(true);
     setStatus('');
     try {
-      setModelList(await fetchModelIds());
-      setStatus(`已載入 ${modelList.length || '模型'}清單`);
+      const ids = await fetchModelIds();
+      setModelList(ids);
+      setStatus(`已載入 ${ids.length} 個模型`);
     } catch (error) {
       setStatus(`載入模型清單失敗：${(error as Error).message}`);
     } finally {
@@ -93,7 +96,7 @@ export function SettingsPanel({ open, settings, transportKind, onChange, onClose
           </button>
           <button type="button" onClick={() => {
             const cleared = saveSettings({ ...draft, apiKey: '' });
-            setDraft(cleared); onChange(cleared); setStatus('已清除金鑰');
+            setDraft(cleared.settings); onChange(cleared.settings); setStatus('已清除金鑰');
           }}>清除金鑰</button>
           <label className="settings-toggle">
             <input

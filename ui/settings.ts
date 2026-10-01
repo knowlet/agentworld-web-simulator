@@ -2,7 +2,10 @@
 // The key never leaves the browser: it is sent exclusively to openrouter.ai.
 
 export const DEFAULT_GENERATOR_MODEL = 'stealth/space-bunny-alpha';
-export const DEFAULT_DECISIONS_MODEL = 'inception/mercury-decide:free';
+// NOTE (2026-10-01): `inception/mercury-decide:free` was removed upstream
+// ("Decision model not found"); the default tracks a live free model until it
+// returns. Any OpenAI-compatible chat model works here via choice-chat.
+export const DEFAULT_DECISIONS_MODEL = 'stealth/space-bunny-alpha';
 export const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_DECISIONS_BASE = 'https://openrouter.ai/api/alpha';
 
@@ -45,15 +48,27 @@ export function loadSettings(): BrowserSettings {
   }
 }
 
-export function saveSettings(settings: BrowserSettings): BrowserSettings {
+export interface SaveResult {
+  settings: BrowserSettings;
+  /** False when the browser refused the write (private mode, quota, denied). */
+  persisted: boolean;
+}
+
+export function saveSettings(settings: BrowserSettings): SaveResult {
   const clean: BrowserSettings = {
     apiKey: settings.apiKey.trim(),
     generatorModel: trimmed(settings.generatorModel, DEFAULT_GENERATOR_MODEL),
     decisionsModel: trimmed(settings.decisionsModel, DEFAULT_DECISIONS_MODEL),
     forceBrowser: settings.forceBrowser === true,
   };
-  localStorage.setItem(LS_KEY, JSON.stringify(clean));
-  return clean;
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(clean));
+    return { settings: clean, persisted: true };
+  } catch {
+    // Storage denied or quota exceeded: still apply to this session so the
+    // panel never crashes; the caller tells the user it will not persist.
+    return { settings: clean, persisted: false };
+  }
 }
 
 export function maskKey(key: string): string {

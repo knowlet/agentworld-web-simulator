@@ -11,13 +11,16 @@ class HttpError extends Error {
 }
 
 const securityHeaders = {
+  'Cache-Control': 'no-store',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  // connect-src includes openrouter.ai so forced browser mode (page served by
+  // this server, OpenRouter called directly from the page) is not CSP-blocked.
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://openrouter.ai; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 };
 
-function response(status: number, body: BodyInit | null, contentType: string, cacheControl = 'no-store') {
-  return new Response(body, { status, headers: { ...securityHeaders, 'Cache-Control': cacheControl, 'Content-Type': contentType } });
+function response(status: number, body: BodyInit | null, contentType: string) {
+  return new Response(body, { status, headers: { ...securityHeaders, 'Content-Type': contentType } });
 }
 function json(status: number, data: unknown) {
   return response(status, JSON.stringify(data), 'application/json; charset=utf-8');
@@ -61,12 +64,12 @@ export function createApp(world: World) {
           const input = await parseJsonBody(req);
           if (url.pathname === '/api/search') {
             const q = searchInput.parse(input);
-            return json(200, await world.search(q.query));
+            return json(200, await world.search(q.query, req.signal));
           }
           const p = pageInput.parse(input);
           try { canonicalUrl(p.url); if (p.from) canonicalUrl(p.from); }
           catch { throw new HttpError(400, 'Invalid simulated URL'); }
-          return json(200, await world.page(p.url, p.from, p.ctx));
+          return json(200, await world.page(p.url, p.from, p.ctx, req.signal));
         } finally { active--; }
       }
       if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed');
@@ -81,9 +84,9 @@ export function createApp(world: World) {
       if (!mapped) throw new HttpError(404, 'Not found');
       const file = Bun.file(new URL(`../dist/${mapped[0]}`, import.meta.url));
       if (!await file.exists()) throw new HttpError(404, 'Not found');
-      // HTML must stay no-store (SPA entry); build assets may be reused briefly.
-      const cache = url.pathname.startsWith('/assets/') ? 'public, max-age=300' : 'no-store';
-      return response(200, file, mapped[1], cache);
+      // Fixed-name bundles (app.js/app.css) stay no-store: without content
+      // hashing, any max-age risks a fresh page loading a stale bundle.
+      return response(200, file, mapped[1]);
     } catch (e) {
       if (e instanceof HttpError) return json(e.status, { error: e.message });
       if (e instanceof z.ZodError) return json(400, { error: 'Invalid request or generated document' });
