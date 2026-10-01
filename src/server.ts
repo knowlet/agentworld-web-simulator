@@ -11,14 +11,13 @@ class HttpError extends Error {
 }
 
 const securityHeaders = {
-  'Cache-Control': 'no-store',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 };
 
-function response(status: number, body: BodyInit | null, contentType: string) {
-  return new Response(body, { status, headers: { ...securityHeaders, 'Content-Type': contentType } });
+function response(status: number, body: BodyInit | null, contentType: string, cacheControl = 'no-store') {
+  return new Response(body, { status, headers: { ...securityHeaders, 'Cache-Control': cacheControl, 'Content-Type': contentType } });
 }
 function json(status: number, data: unknown) {
   return response(status, JSON.stringify(data), 'application/json; charset=utf-8');
@@ -82,7 +81,9 @@ export function createApp(world: World) {
       if (!mapped) throw new HttpError(404, 'Not found');
       const file = Bun.file(new URL(`../dist/${mapped[0]}`, import.meta.url));
       if (!await file.exists()) throw new HttpError(404, 'Not found');
-      return response(200, file, mapped[1]);
+      // HTML must stay no-store (SPA entry); build assets may be reused briefly.
+      const cache = url.pathname.startsWith('/assets/') ? 'public, max-age=300' : 'no-store';
+      return response(200, file, mapped[1], cache);
     } catch (e) {
       if (e instanceof HttpError) return json(e.status, { error: e.message });
       if (e instanceof z.ZodError) return json(400, { error: 'Invalid request or generated document' });
@@ -93,6 +94,8 @@ export function createApp(world: World) {
 }
 
 export function listen(app: ReturnType<typeof createApp>, port: number, host = '127.0.0.1') {
+  // Bun.serve has no auto-compression option (types reject `compress`); GitHub
+  // Pages compresses at the CDN and LAN deployments do not need it.
   const server = Bun.serve({ hostname: host, port, fetch: app });
   return { server, base: `http://${host}:${server.port}`, stop: async () => { await server.stop(true); } };
 }

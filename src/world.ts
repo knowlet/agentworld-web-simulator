@@ -2,7 +2,7 @@ import type { Spec } from '@json-render/core';
 import { canonicalUrl, normalizePage, normalizeSearch, type CompositionInfo, type Context, type Page, type Search, type Result, type Policy, type Site } from './domain';
 import { composePage, composeSearch } from './composer';
 import { Providers } from './providers';
-import { Store, key } from './store';
+import { key, type WorldStore } from './storage';
 export type SearchDocument = Search & { query: string; policy: { intent: string; confidence: number; source: 'jev' | 'mock' } };
 interface PageArtifact { document: Page; spec: Spec; composition: CompositionInfo }
 interface SearchArtifact { document: SearchDocument; spec: Spec; composition: CompositionInfo }
@@ -11,7 +11,7 @@ interface CachedResult<T> { data: T; cached: boolean; mode: 'live' | 'mock'; gen
 export class World {
   private flights = new Map<string, Promise<unknown>>();
   private siteTails = new Map<string, Promise<unknown>>();
-  constructor(readonly store: Store, readonly providers: Providers) {}
+  constructor(readonly store: WorldStore, readonly providers: Providers) {}
   private async materialize<T>(kind: string, identity: string, generate: () => Promise<T>): Promise<CachedResult<T>> {
     const started = Date.now(); const k = key(identity); const id = `${kind}:${k}`;
     let data = this.store.get<T>(kind, k); let cached = data !== undefined;

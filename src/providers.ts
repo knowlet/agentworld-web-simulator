@@ -15,6 +15,18 @@ export class ProviderError extends Error {
 export interface Usage { provider: string; elapsedMs: number; attempts: number; usage?: unknown }
 export type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+// Browser-safe helpers: no Bun.sleep / Buffer in the shared provider path.
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  let size = 0;
+  for (const part of parts) size += part.byteLength;
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) { out.set(part, offset); offset += part.byteLength; }
+  return out;
+}
+const UTF8 = new TextDecoder('utf-8');
+
 function mockEvaluate(): Experimental_CompositionEvaluator {
   return async ({ state, questions }) => {
     const selected = Array.isArray(state.selected_elements)
@@ -65,7 +77,7 @@ export class Providers {
   readonly calls: Usage[] = [];
   private readonly evaluator: Experimental_CompositionEvaluator;
 
-  constructor(readonly config: Config, readonly fetcher: Fetcher = fetch) {
+  constructor(readonly config: Config, readonly fetcher: Fetcher = (input, init) => globalThis.fetch(input, init)) {
     this.evaluator = config.mode === 'mock' ? mockEvaluate() : request => this.evaluateTypeSafe(request);
   }
 
@@ -78,7 +90,7 @@ export class Providers {
     request.signal.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => controller.abort(new DOMException('Jev evaluation timed out', 'TimeoutError')), this.config.jevEvalTimeout);
     try {
-      const res = await this.fetcher(`${this.config.jevBase}/systemone`, {
+      const res = await this.fetcher(`${this.config.jevBase}${this.config.jevPath}`, {
         method: 'POST',
         redirect: 'error',
         signal: controller.signal,
@@ -132,7 +144,7 @@ export class Providers {
         if (!res.ok) {
           await res.body?.cancel();
           if (attempt === 1 && [429, 502, 503, 504, 529].includes(res.status)) {
-            await Bun.sleep(500); signal.throwIfAborted(); continue;
+            await delay(500); signal.throwIfAborted(); continue;
           }
           throw new ProviderError(provider, `HTTP ${res.status}`);
         }
@@ -145,7 +157,7 @@ export class Providers {
           chunks.push(value);
         }
         let data: unknown;
-        try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        try { data = JSON.parse(UTF8.decode(concatBytes(chunks))); }
         catch { throw new ProviderError(provider, 'invalid response JSON'); }
         const usage = data && typeof data === 'object' && 'usage' in data ? data.usage : undefined;
         const safeUsage = usage && typeof usage === 'object' ? Object.fromEntries(Object.entries(usage)
