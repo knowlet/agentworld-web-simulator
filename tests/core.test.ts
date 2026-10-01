@@ -8,7 +8,9 @@ import { createElement } from 'react';
 import { canonicalUrl, normalizePage, pageDraftSchema, type PageDraft } from '../src/domain';
 import { loadConfig, namespace } from '../src/config';
 import { composePage } from '../src/composer';
-import { Store } from '../src/store';
+import { Store, key } from '../src/store';
+import { sha256Hex } from '../src/hash';
+import { LocalStore } from '../ui/client-world';
 import { Providers } from '../src/providers';
 import { World } from '../src/world';
 import { createApp, listen } from '../src/server';
@@ -212,4 +214,45 @@ test('HTTP API validates inputs, denies cross-origin calls and returns composed 
     const health = await fetch(base + '/api/health'); assert(health.headers.get('content-security-policy')?.includes("script-src 'self'"));
     assert.equal((await health.json()).upstreamConnectivity, 'not-probed');
   } finally { await running.stop(); store.close(); }
+});
+
+test('pure sha256 hash matches standard digests and prior Bun.CryptoHasher storage keys', () => {
+  assert.equal(sha256Hex(''), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+  assert.equal(sha256Hex('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  for (const input of ['https://example.org/page', 'x'.repeat(200), '搜尋語句 with unicode', 'y'.repeat(55), 'z'.repeat(64)]) {
+    assert.equal(key(input), new Bun.CryptoHasher('sha256').update(input).digest('hex'));
+  }
+});
+
+test('decisions endpoint path is configurable and defaults to TypeSafe /systemone', () => {
+  assert.equal(loadConfig({ JEV_API_KEY: 'k' }).jevPath, '/systemone');
+  const openrouter = loadConfig({ JEV_API_KEY: 'k', JEV_BASE_URL: 'https://openrouter.ai/api/alpha', JEV_PATH: '/decisions' });
+  assert.equal(openrouter.jevBase, 'https://openrouter.ai/api/alpha');
+  assert.equal(openrouter.jevPath, '/decisions');
+  assert.throws(() => loadConfig({ JEV_API_KEY: 'k', JEV_PATH: 'decisions' }), /path/);
+  assert.throws(() => loadConfig({ JEV_API_KEY: 'k', JEV_PATH: '/bad path' }), /path/);
+});
+
+class MemoryStorage implements Storage {
+  private map = new Map<string, string>();
+  get length() { return this.map.size; }
+  key(index: number) { return [...this.map.keys()][index] ?? null; }
+  getItem(k: string) { return this.map.get(k) ?? null; }
+  setItem(k: string, v: string) { this.map.set(k, v); }
+  removeItem(k: string) { this.map.delete(k); }
+  clear() { this.map.clear(); }
+}
+
+test('browser LocalStore persists per namespace with insert-or-ignore semantics', () => {
+  const storage = new MemoryStorage();
+  const a = new LocalStore('ns-one', storage);
+  assert.deepEqual(a.put('page', 'p1', { title: 'first' }), { title: 'first' });
+  assert.deepEqual(a.put('page', 'p1', { title: 'second' }), { title: 'first' });
+  assert.deepEqual(a.get('page', 'p1'), { title: 'first' });
+  assert.deepEqual(a.stats(), { page: 1 });
+  const reopened = new LocalStore('ns-one', storage);
+  assert.deepEqual(reopened.get('page', 'p1'), { title: 'first' });
+  const otherWorld = new LocalStore('ns-two', storage);
+  assert.equal(otherWorld.get('page', 'p1'), undefined);
+  a.close();
 });
