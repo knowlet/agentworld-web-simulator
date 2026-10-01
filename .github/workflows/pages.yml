@@ -1,0 +1,57 @@
+name: Deploy GitHub Pages (static browser build)
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Verify pinned official json-render Jev preview
+        run: bun run verify:json-render
+      - name: Type check
+        run: bun run typecheck
+      - name: Build static bundle for the project subpath
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}/
+        run: |
+          bun run build
+          cp dist/index.html dist/404.html
+      - name: Enable Pages (static, GitHub Actions source) if needed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/pages" >/dev/null 2>&1; then
+            echo "Pages already configured"
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/pages" -f build_type=workflow \
+              || echo "::warning::Could not enable Pages with GITHUB_TOKEN — enable it manually in Settings → Pages → Source: GitHub Actions"
+          fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Summary
+        run: |
+          echo "## GitHub Pages deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "Static build served from \`${{ steps.deployment.outputs.page_url }}\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "The page calls OpenRouter directly from the visitor's browser (key stays in localStorage); no server is involved." >> "$GITHUB_STEP_SUMMARY"
