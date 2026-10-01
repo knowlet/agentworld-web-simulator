@@ -4,16 +4,16 @@
 
 本版技術路線是：
 
-- **OpenAI-compatible API**（預計 DeepSeek V4.1 Flash）只生成結構化搜尋／頁面內容。
-- **Jev** 負責 bounded decisions，包括 search intent、page policy，以及 UI composition。
-- **json-render 官方 experimental composer** (`experimental_composeSpec`) 直接把 app-owned component candidates 組成正式 `Spec`；evaluator 改成 server-side TypeSafe `/systemone` adapter，不走 Vercel AI Gateway。
+- **OpenAI-compatible API**（任何 OpenAI-compatible endpoint；示範用 `stealth/space-bunny-alpha`）只生成結構化搜尋／頁面內容。
+- **Jev** 負責 bounded decisions，包括 search intent、page policy，以及 UI composition（示範用 `inception/mercury-decide:free`）。
+- **json-render 官方 experimental composer** (`experimental_composeSpec`) 直接把 app-owned component candidates 組成正式 `Spec`；evaluator 是 server-side System One adapter（`JEV_BASE_URL` + `JEV_PATH`，可指 TypeSafe `/systemone` 或 OpenRouter `/decisions`），不走 Vercel AI Gateway。
 - **React + @json-render/react** 只渲染 server 已驗證、已 cache 的 `Spec`。
 - **Bun 1.4.2** 負責 runtime、package manager、bundler/test command 與 HTTP server；持久層使用 **`bun:sqlite`**。
 
 ```text
 query / URL / click context
         │
-        ├─→ TypeSafe /v1/systemone (jev-latest)
+        ├─→ System One decisions endpoint (JEV_BASE_URL + JEV_PATH)
         │        └─→ world policy + json-render composition decisions
         │
         └─→ OpenAI-compatible generator
@@ -76,18 +76,20 @@ Link #1..N
 
 candidate 的 props 已經是具體資料；Jev **不能寫 prose、URL、CSS、JS 或任意 props**。它只決定 candidate membership、root、parent/slot 與 order。這正是 json-render 官方 Jev composer 的模型。
 
-### 2. Jev evaluator 直接走 TypeSafe 官方 API
+### 2. Jev evaluator 直接走 System One decisions API
 
-`experimental_composeSpec` 本身是 model-neutral：它只需要一個符合 `Experimental_CompositionEvaluator` 的 callback。這個 repo 不使用 json-render 內建的 Gateway adapter；server 直接呼叫：
+`experimental_composeSpec` 本身是 model-neutral：它只需要一個符合 `Experimental_CompositionEvaluator` 的 callback。這個 repo 不使用 json-render 內建的 Gateway adapter；server 直接呼叫 `JEV_BASE_URL + JEV_PATH` 組成的 endpoint（預設 TypeSafe `/systemone`），保持 TypeSafe 原生 `state + Choice questions` contract，回傳的 choice / confidence / probabilities 經本地驗證（out-of-catalog 拒絕、機率分佈完整性）後，再轉成 json-render composer 需要的 evaluator result。
 
-```text
-POST https://api.typesafe.ai/v1/systemone
-Authorization: Bearer $JEV_API_KEY
+同一個 adapter 也支援 OpenRouter 的 decisions model：
+
+```dotenv
+JEV_BASE_URL=https://openrouter.ai/api/alpha
+JEV_PATH=/decisions
+JEV_MODEL=inception/mercury-decide:free
+JEV_API_KEY=your_openrouter_key
 ```
 
-request 保持 TypeSafe 的原生 `state + Choice questions` contract，回傳的 choice / confidence / probabilities 經本地驗證後，再轉成 json-render composer 需要的 evaluator result。
-
-因此 live 模式只需要 **`JEV_API_KEY`**（或 `TYPESAFE_API_KEY`），不需要 `JEV_API_KEY`，也不經 Vercel AI Gateway。
+因此 live 模式只需要 **`JEV_API_KEY`**（或 `TYPESAFE_API_KEY`），也不經 Vercel AI Gateway。
 
 ### 3. Cache 保存內容 + UI tree
 
@@ -115,8 +117,8 @@ Reload／重訪同一 observation 不會重新呼叫 generator 或 Jev。`WORLD_
 需要 **Bun 1.4.2+**。
 
 ```bash
-git clone https://github.com/knowlet/jev-agentworld-web-simulator.git
-cd jev-agentworld-web-simulator
+git clone https://github.com/knowlet/agentworld-web-simulator.git
+cd agentworld-web-simulator
 bun install
 cp .env.example .env
 bun run build
@@ -159,6 +161,31 @@ REQUEST_TIMEOUT_MS=120000
 `OPENAI_MODEL=deepseek-flash` 只是預設示例；請填你 endpoint 真正提供的 DeepSeek V4.1 Flash model ID。本 repo 只依賴 OpenAI-compatible `/chat/completions`。
 
 `OPENAI_JSON_MODE` 支援 `json_object` / `json_schema` / `off`。所有模式最後都還會跑本地 Zod validation。
+
+## 介面設定與瀏覽器模式（OpenRouter）
+
+頁面右上 **⚙** 可填入 **OpenRouter API key**、選擇**生成模型**與 **Jev 決策模型**（預設 `stealth/space-bunny-alpha` + `inception/mercury-decide:free`；「載入模型清單」抓 OpenRouter 公開目錄）。設定只存於該瀏覽器的 localStorage，請求只送往 `openrouter.ai`。
+
+兩種模式會自動切換：
+
+| 模式 | 判定 | 內容生成 | 世界持久化 |
+|---|---|---|---|
+| 伺服器 | `/api/health` 可達 | Bun server 讀 `.env` | `bun:sqlite` |
+| 瀏覽器 | 靜態托管（GitHub Pages）或勾選「強制瀏覽器模式」 | 頁端直呼 OpenRouter | `localStorage`（依 world namespace 分群） |
+
+瀏覽器模式跑同一條 pipeline：Zod 驗證 → atomic candidates → 官方 `experimental_composeSpec` → catalog 驗證 → renderer；只是 provider 改由頁端呼叫、持久層換成 `localStorage`。金鑰存在使用者瀏覽器中，公開站請自行評估（建議低額度、可隨時撤銷的金鑰）；伺服器模式完全不接觸這個金鑰。
+
+瀏覽器模式的 Jev 直接打原生 decisions endpoint（`https://openrouter.ai/api/alpha/decisions`，與 server 模式同 contract；需瀏覽器允許第三方 fetch，CSP 已放行）。若 decisions 模型暫時不可用，server 另有 `JEV_PROTOCOL=choice-chat` 可讓任何 OpenAI-compatible chat 模型代答 Choice 題（選項嚴格限定在 catalog 內，錯誤直接拒絕不 fallback）。
+
+防嵌入：伺服器回應標頭保留 `frame-ancestors 'none'`；靜態站沒有回應標頭，改由頁面載入時嘗試破框、失敗時隱藏 ⚙ 與設定面板並顯示警告（meta CSP 的 `frame-ancestors` 瀏覽器會忽略，故不放）。
+
+## GitHub Pages 部署
+
+`Deploy GitHub Pages (static browser build)` workflow 在 push `develop` 時：以 `BASE_PATH=/<repo>/` 建置靜態 bundle（`__BASE__` 進 bundle、asset 路徑改寫）→ 複製 `index.html` 為 `404.html`（SPA fallback）→ `actions/deploy-pages`。完成後網址為 `https://<owner>.github.io/<repo>/`。
+
+- 模擬同一環境：`BASE_PATH=/<repo>/ bun run build && cp dist/index.html dist/404.html`，再用 static file server 掛在該子路徑（未知路徑回 `404.html` + HTTP 404，與 Pages 行為一致）。
+- 本地 server 模式請用預設 `bun run build`（`BASE_PATH=/`）；兩種 build 的 `dist/` 不可混用。
+- workflow 需要 repo 的 Pages 設定為 **Source: GitHub Actions**（workflow 內會嘗試自動啟用，失敗時到 Settings → Pages 手動切換）。
 
 ## MVP 功能
 
@@ -203,10 +230,11 @@ bun run test:live
 - provider / Gateway transport contract tests
 - official `experimental_composeSpec` candidate composition tests
 - bun:sqlite persistence / dedup / retry behavior
+- 純 TS sha256 與既有 `Bun.CryptoHasher` storage key 相容、`JEV_PATH` 設定、瀏覽器 `localStorage` store 語意
 - XSS-safe rendering
 - Chromium 搜尋 → 頁面 → link → back → reload
 
-不使用 secrets、不呼叫外部模型。
+不使用 secrets、不呼叫外部模型。push `develop` 另有 `Deploy GitHub Pages (static browser build)` 部署靜態瀏覽器版。
 
 ### Live smoke
 

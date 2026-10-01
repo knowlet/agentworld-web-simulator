@@ -119,10 +119,12 @@ async function compose(
   config: Config,
   source: CompositionInfo['source'],
   requiredTypes: string[],
+  externalSignal?: AbortSignal,
 ): Promise<{ spec: Spec; composition: CompositionInfo }> {
   let finalSpec: Spec | null = null;
   let complete: { stopReason: 'finish' | 'limit' | 'unavailable'; evaluations: number; inputTokens: number | null } | null = null;
-  const signal = AbortSignal.timeout(config.composeTimeout);
+  const timeout = AbortSignal.timeout(config.composeTimeout);
+  const signal = externalSignal ? AbortSignal.any([timeout, externalSignal]) : timeout;
   for await (const event of experimental_composeSpec({
     catalog,
     candidates,
@@ -158,16 +160,16 @@ async function compose(
   } };
 }
 
-export function composePage(page: Page, evaluate: Experimental_CompositionEvaluator, config: Config) {
+export function composePage(page: Page, evaluate: Experimental_CompositionEvaluator, config: Config, signal?: AbortSignal) {
   return compose(pageCandidates(page),
     `Compose a complete simulated web page for ${page.url}. Preserve every required generated section and outgoing link. The world-policy page type is ${page.policy.layout}; Jev should choose the final component tree, grouping, and order.`,
     { kind: 'page', url: page.url, site: page.siteName, title: page.title, worldPolicy: page.policy.layout },
-    evaluate, config, config.mode === 'mock' ? 'mock' : 'json-render-jev', ['Surface', 'Header', 'Section', 'Links', 'Link']);
+    evaluate, config, config.mode === 'mock' ? 'mock' : 'json-render-jev', ['Surface', 'Header', 'Section', 'Links', 'Link'], signal);
 }
 
-export function composeSearch(query: string, data: Search, evaluate: Experimental_CompositionEvaluator, config: Config) {
+export function composeSearch(query: string, data: Search, evaluate: Experimental_CompositionEvaluator, config: Config, signal?: AbortSignal) {
   return compose(searchCandidates(query, data),
     `Compose a simulated search-results page for the query ${JSON.stringify(short(query, 200))}. Include the heading and all required search-result links; related searches are optional.`,
     { kind: 'search', query: short(query, 200), resultCount: data.results.length },
-    evaluate, config, config.mode === 'mock' ? 'mock' : 'json-render-jev', ['Surface', 'Header', 'Links', 'Link']);
+    evaluate, config, config.mode === 'mock' ? 'mock' : 'json-render-jev', ['Surface', 'Header', 'Links', 'Link'], signal);
 }

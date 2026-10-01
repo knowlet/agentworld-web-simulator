@@ -14,7 +14,9 @@ const securityHeaders = {
   'Cache-Control': 'no-store',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  // connect-src includes openrouter.ai so forced browser mode (page served by
+  // this server, OpenRouter called directly from the page) is not CSP-blocked.
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://openrouter.ai; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 };
 
 function response(status: number, body: BodyInit | null, contentType: string) {
@@ -62,12 +64,12 @@ export function createApp(world: World) {
           const input = await parseJsonBody(req);
           if (url.pathname === '/api/search') {
             const q = searchInput.parse(input);
-            return json(200, await world.search(q.query));
+            return json(200, await world.search(q.query, req.signal));
           }
           const p = pageInput.parse(input);
           try { canonicalUrl(p.url); if (p.from) canonicalUrl(p.from); }
           catch { throw new HttpError(400, 'Invalid simulated URL'); }
-          return json(200, await world.page(p.url, p.from, p.ctx));
+          return json(200, await world.page(p.url, p.from, p.ctx, req.signal));
         } finally { active--; }
       }
       if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed');
@@ -82,6 +84,8 @@ export function createApp(world: World) {
       if (!mapped) throw new HttpError(404, 'Not found');
       const file = Bun.file(new URL(`../dist/${mapped[0]}`, import.meta.url));
       if (!await file.exists()) throw new HttpError(404, 'Not found');
+      // Fixed-name bundles (app.js/app.css) stay no-store: without content
+      // hashing, any max-age risks a fresh page loading a stale bundle.
       return response(200, file, mapped[1]);
     } catch (e) {
       if (e instanceof HttpError) return json(e.status, { error: e.message });
@@ -93,6 +97,8 @@ export function createApp(world: World) {
 }
 
 export function listen(app: ReturnType<typeof createApp>, port: number, host = '127.0.0.1') {
+  // Bun.serve has no auto-compression option (types reject `compress`); GitHub
+  // Pages compresses at the CDN and LAN deployments do not need it.
   const server = Bun.serve({ hostname: host, port, fetch: app });
   return { server, base: `http://${host}:${server.port}`, stop: async () => { await server.stop(true); } };
 }

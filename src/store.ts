@@ -1,8 +1,12 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { key, type WorldStore } from './storage';
 
-export class Store {
+export { key };
+export type { WorldStore };
+
+export class Store implements WorldStore {
   private db: Database;
   private select;
   private insert;
@@ -19,7 +23,7 @@ export class Store {
       PRIMARY KEY(namespace,kind,key)
     )`);
     this.select = this.db.query('SELECT data FROM records WHERE namespace=? AND kind=? AND key=?');
-    this.insert = this.db.query('INSERT OR IGNORE INTO records VALUES (?,?,?,?,?)');
+    this.insert = this.db.query('INSERT OR IGNORE INTO records VALUES (?,?,?,?,?) RETURNING data');
     this.counts = this.db.query('SELECT kind, COUNT(*) AS n FROM records WHERE namespace=? GROUP BY kind');
   }
 
@@ -29,8 +33,10 @@ export class Store {
   }
 
   put<T>(kind: string, key: string, data: T): T {
-    this.insert.run(this.namespace, kind, key, JSON.stringify(data), Date.now());
-    return this.get<T>(kind, key)!;
+    // INSERT OR IGNORE + RETURNING: one round trip on the common miss path;
+    // on conflict SQLite returns no row and we read the original value back.
+    const row = this.insert.get(this.namespace, kind, key, JSON.stringify(data), Date.now()) as { data: string } | null;
+    return row ? JSON.parse(row.data) as T : this.get<T>(kind, key)!;
   }
 
   stats(): Record<string, number> {
@@ -39,8 +45,4 @@ export class Store {
   }
 
   close() { this.db.close(); }
-}
-
-export function key(s: string) {
-  return new Bun.CryptoHasher('sha256').update(s).digest('hex');
 }

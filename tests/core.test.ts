@@ -5,10 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { canonicalUrl, normalizePage, pageDraftSchema, type PageDraft } from '../src/domain';
+import { VERSION, canonicalUrl, normalizePage, pageDraftSchema, type PageDraft } from '../src/domain';
 import { loadConfig, namespace } from '../src/config';
 import { composePage } from '../src/composer';
-import { Store } from '../src/store';
+import { Store, key } from '../src/store';
+import { sha256Hex } from '../src/hash';
+import { LocalStore } from '../ui/client-world';
+import { defaultSettings, loadSettings, saveSettings } from '../ui/settings';
 import { Providers } from '../src/providers';
 import { World } from '../src/world';
 import { createApp, listen } from '../src/server';
@@ -170,6 +173,17 @@ for (const mode of ['off', 'json_schema'] as const) {
     p.config.jsonMode = mode; await p.page({ url: 'https://a.org/' }, policy);
   });
 }
+test('length-truncated generation gets one doubled-budget retry, then rejects', async () => {
+  const c = { ...loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' }), mode: 'live' as const, key: 'k' };
+  const budgets: number[] = [];
+  const p = new Providers(c, (async (_input: string | URL | Request, init?: RequestInit) => {
+    budgets.push((JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens);
+    return Response.json({ choices: [{ finish_reason: 'length', message: { content: '{"partial":true}' } }] });
+  }));
+  await assert.rejects(p.page({ url: 'https://a.org/' }, policy), /did not finish/);
+  assert.deepEqual(budgets, [4096, 8192]);
+});
+
 test('truncated generation is rejected and not tolerated as a completed document', async () => {
   const p = liveProvider(() => Response.json({ choices: [{ finish_reason: 'length', message: { content: JSON.stringify(fixture) } }] }));
   await assert.rejects(p.page({ url: 'https://a.org/' }, policy), /did not finish/);
@@ -212,4 +226,199 @@ test('HTTP API validates inputs, denies cross-origin calls and returns composed 
     const health = await fetch(base + '/api/health'); assert(health.headers.get('content-security-policy')?.includes("script-src 'self'"));
     assert.equal((await health.json()).upstreamConnectivity, 'not-probed');
   } finally { await running.stop(); store.close(); }
+});
+
+test('pure sha256 hash matches standard digests and prior Bun.CryptoHasher storage keys', () => {
+  assert.equal(sha256Hex(''), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+  assert.equal(sha256Hex('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  for (const input of ['https://example.org/page', 'x'.repeat(200), '搜尋語句 with unicode', 'y'.repeat(55), 'z'.repeat(64)]) {
+    assert.equal(key(input), new Bun.CryptoHasher('sha256').update(input).digest('hex'));
+  }
+});
+
+test('decisions endpoint path is configurable and defaults to TypeSafe /systemone', () => {
+  assert.equal(loadConfig({ JEV_API_KEY: 'k' }).jevPath, '/systemone');
+  const openrouter = loadConfig({ JEV_API_KEY: 'k', JEV_BASE_URL: 'https://openrouter.ai/api/alpha', JEV_PATH: '/decisions' });
+  assert.equal(openrouter.jevBase, 'https://openrouter.ai/api/alpha');
+  assert.equal(openrouter.jevPath, '/decisions');
+  assert.throws(() => loadConfig({ JEV_API_KEY: 'k', JEV_PATH: 'decisions' }), /path/);
+  assert.throws(() => loadConfig({ JEV_API_KEY: 'k', JEV_PATH: '/bad path' }), /path/);
+});
+
+test('choice-chat evaluator answers Choice questions through any chat model', async () => {
+  const base = loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' });
+  const c = {
+    ...base, mode: 'live' as const,
+    jevProtocol: 'choice-chat' as const,
+    jevBase: 'https://openrouter.ai/api/v1', jevPath: '/chat/completions',
+    jevKey: 'k', jevModel: 'inception/mercury-decide:free', key: 'k',
+  };
+  const chatBody = {
+    choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+      answers: {
+        layout: { choice: 'docs', confidence: 0.7 },
+        palette: { choice: 'dark', confidence: 0.6 },
+      },
+    }) } }],
+  };
+  const p = new Providers(c, (async (input: string | URL | Request) => {
+    assert.ok(String(input).endsWith('/chat/completions'));
+    return Response.json(chatBody);
+  }));
+  const answers = await p.choices({ url: 'https://a.org/' }, {
+    layout: { type: 'choice', instructions: 'Pick.', criteria: { article: 'A', docs: 'D' } },
+    palette: { type: 'choice', instructions: 'Pick.', criteria: { neutral: 'N', dark: 'D' } },
+  });
+  assert.equal(answers.layout?.choice, 'docs');
+  assert.equal(answers.palette?.choice, 'dark');
+});
+
+test('choice-chat evaluator rejects out-of-catalog choices like the systemone path', async () => {
+  const base = loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' });
+  const c = {
+    ...base, mode: 'live' as const,
+    jevProtocol: 'choice-chat' as const,
+    jevBase: 'https://openrouter.ai/api/v1', jevPath: '/chat/completions',
+    jevKey: 'k', jevModel: 'm', key: 'k',
+  };
+  const bad = {
+    choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+      answers: { layout: { choice: 'execute_js', confidence: 1 } },
+    }) } }],
+  };
+  const p = new Providers(c, (async () => Response.json(bad)));
+  await assert.rejects(p.choices({ url: 'https://a.org/' }, {
+    layout: { type: 'choice', instructions: 'Pick.', criteria: { article: 'A', docs: 'D' } },
+  }), /out-of-catalog/);
+});
+
+test('choice-chat correction retry recovers from one bad key', async () => {
+  const base = loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' });
+  const c = {
+    ...base, mode: 'live' as const,
+    jevProtocol: 'choice-chat' as const,
+    jevBase: 'https://openrouter.ai/api/v1', jevPath: '/chat/completions',
+    jevKey: 'k', jevModel: 'm', key: 'k',
+  };
+  const good = (choice: string) => ({
+    choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+      answers: { layout: { choice, confidence: 0.8 } },
+    }) } }],
+  });
+  let calls = 0;
+  const p = new Providers(c, (async () => Response.json(good(++calls === 1 ? 'nope' : 'docs'))));
+  const answers = await p.choices({ url: 'https://a.org/' }, {
+    layout: { type: 'choice', instructions: 'Pick.', criteria: { article: 'A', docs: 'D' } },
+  });
+  assert.equal(answers.layout?.choice, 'docs');
+  assert.equal(calls, 2);
+});
+
+test('choice-chat joins the namespace without breaking the legacy default tuple', () => {
+  const c = loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' });
+  assert.equal(c.jevProtocol, 'systemone');
+  assert.notEqual(namespace({ ...c, jevProtocol: 'choice-chat' }), namespace(c));
+});
+
+test('default decisions path keeps the legacy namespace (old caches stay readable)', () => {
+  const c = loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' });
+  assert.equal(c.jevPath, '/systemone');
+  // Historical tuple from before JEV_PATH existed (no jevPath element).
+  const legacy = sha256Hex(JSON.stringify([VERSION, c.epoch, c.mode, c.base, c.model,
+    c.jevBase, c.jevModel, c.jsonMode, c.thinking, c.maxTokens, c.composeMaxSteps, c.composeMaxElements, c.composeMaxDepth]))
+    .slice(0, 24);
+  assert.equal(namespace(c), legacy);
+  assert.notEqual(namespace({ ...c, jevPath: '/decisions' }), legacy);
+});
+
+class MemoryStorage implements Storage {
+  private map = new Map<string, string>();
+  get length() { return this.map.size; }
+  key(index: number) { return [...this.map.keys()][index] ?? null; }
+  getItem(k: string) { return this.map.get(k) ?? null; }
+  setItem(k: string, v: string) { this.map.set(k, v); }
+  removeItem(k: string) { this.map.delete(k); }
+  clear() { this.map.clear(); }
+}
+
+test('browser LocalStore persists per namespace with insert-or-ignore semantics', () => {
+  const storage = new MemoryStorage();
+  const a = new LocalStore('ns-one', storage);
+  assert.deepEqual(a.put('page', 'p1', { title: 'first' }), { title: 'first' });
+  assert.deepEqual(a.put('page', 'p1', { title: 'second' }), { title: 'first' });
+  assert.deepEqual(a.get('page', 'p1'), { title: 'first' });
+  assert.deepEqual(a.stats(), { page: 1 });
+  const reopened = new LocalStore('ns-one', storage);
+  assert.deepEqual(reopened.get('page', 'p1'), { title: 'first' });
+  const otherWorld = new LocalStore('ns-two', storage);
+  assert.equal(otherWorld.get('page', 'p1'), undefined);
+  a.close();
+});
+
+test('concurrent LocalStore tabs never clobber each other (per-record keys)', () => {
+  const storage = new MemoryStorage();
+  const tabA = new LocalStore('ns-shared', storage);
+  const tabB = new LocalStore('ns-shared', storage);
+  tabA.put('page', 'from-a', { title: 'a' });
+  tabB.put('page', 'from-b', { title: 'b' });
+  tabA.put('search', 'q', { results: [] });
+  assert.deepEqual(tabA.get('page', 'from-b'), { title: 'b' });
+  assert.deepEqual(tabB.get('page', 'from-a'), { title: 'a' });
+  assert.deepEqual(tabA.stats(), { page: 2, search: 1 });
+});
+
+test('aborted provider calls fail fast as cancelled instead of timing out', async () => {
+  const c = { ...loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' }), mode: 'live' as const, key: 'k' };
+  let seenAborted: boolean | undefined;
+  const p = new Providers(c, (async (_input: string | URL | Request, init?: RequestInit) => {
+    seenAborted = (init?.signal as AbortSignal | undefined)?.aborted;
+    await new Promise(r => setTimeout(r, 50));
+    (init?.signal as AbortSignal | undefined)?.throwIfAborted();
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{}' } }] });
+  }));
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(p.post('openai', 'https://example.org/', 'k', {}, controller.signal), /cancelled/);
+  assert.equal(seenAborted, true);
+});
+
+test('world search threads the abort signal through policy, generation and composition', async () => {
+  const c = { ...loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' }), mode: 'live' as const, key: 'k' };
+  const abortedFlags: Array<boolean | undefined> = [];
+  const providers = new Providers(c, (async (_input: string | URL | Request, init?: RequestInit) => {
+    const signal = init?.signal as AbortSignal | undefined;
+    abortedFlags.push(signal?.aborted);
+    await new Promise(r => setTimeout(r, 20));
+    signal?.throwIfAborted();
+    return Response.json({ answers: {} });
+  }));
+  const store = new Store(':memory:', 'abort-probe');
+  const world = new World(store, providers);
+  try {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(world.search('deep sea', controller.signal));
+    assert.ok(abortedFlags.length > 0);
+    assert.ok(abortedFlags.every(flag => flag === true));
+    assert.equal(store.stats().search, undefined);
+  } finally { store.close(); }
+});
+
+test('saveSettings survives denied storage and still applies to the session', () => {
+  const throwing = new MemoryStorage();
+  throwing.setItem = () => { throw new Error('denied'); };
+  (globalThis as Record<string, unknown>).localStorage = throwing;
+  try {
+    const saved = saveSettings({ ...defaultSettings(), apiKey: ' k ', forceBrowser: true });
+    assert.equal(saved.persisted, false);
+    assert.equal(saved.settings.apiKey, 'k');
+    assert.equal(saved.settings.forceBrowser, true);
+    const reading = new MemoryStorage();
+    (globalThis as Record<string, unknown>).localStorage = reading;
+    const kept = saveSettings({ ...defaultSettings(), apiKey: ' k ' });
+    assert.equal(kept.persisted, true);
+    assert.deepEqual(loadSettings().apiKey, 'k');
+  } finally {
+    delete (globalThis as Record<string, unknown>).localStorage;
+  }
 });
