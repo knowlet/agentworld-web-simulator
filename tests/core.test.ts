@@ -251,7 +251,7 @@ test('choice-chat evaluator answers Choice questions through any chat model', as
     ...base, mode: 'live' as const,
     jevProtocol: 'choice-chat' as const,
     jevBase: 'https://openrouter.ai/api/v1', jevPath: '/chat/completions',
-    jevKey: 'k', jevModel: 'stealth/space-bunny-alpha', key: 'k',
+    jevKey: 'k', jevModel: 'inception/mercury-decide:free', key: 'k',
   };
   const chatBody = {
     choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({

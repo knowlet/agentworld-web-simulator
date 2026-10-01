@@ -175,7 +175,7 @@ REQUEST_TIMEOUT_MS=120000
 
 瀏覽器模式跑同一條 pipeline：Zod 驗證 → atomic candidates → 官方 `experimental_composeSpec` → catalog 驗證 → renderer；只是 provider 改由頁端呼叫、持久層換成 `localStorage`。金鑰存在使用者瀏覽器中，公開站請自行評估（建議低額度、可隨時撤銷的金鑰）；伺服器模式完全不接觸這個金鑰。
 
-瀏覽器模式的 Jev 走 `choice-chat`：任何 OpenAI-compatible chat 模型直接回答 Choice 題（選項嚴格限定在 catalog 內，錯誤直接拒絕不 fallback）。伺服器模式預設仍是 System One decisions（`JEV_PROTOCOL=systemone`；TypeSafe `/systemone` 或 OpenRouter `/decisions` 由 `JEV_PATH` 切換）。
+瀏覽器模式的 Jev 直接打原生 decisions endpoint（`https://openrouter.ai/api/alpha/decisions`，與 server 模式同 contract；需瀏覽器允許第三方 fetch，CSP 已放行）。若 decisions 模型暫時不可用，server 另有 `JEV_PROTOCOL=choice-chat` 可讓任何 OpenAI-compatible chat 模型代答 Choice 題（選項嚴格限定在 catalog 內，錯誤直接拒絕不 fallback）。
 
 防嵌入：伺服器回應標頭保留 `frame-ancestors 'none'`；靜態站沒有回應標頭，改由頁面載入時嘗試破框、失敗時隱藏 ⚙ 與設定面板並顯示警告（meta CSP 的 `frame-ancestors` 瀏覽器會忽略，故不放）。
 

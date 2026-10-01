@@ -4,7 +4,7 @@ import { World } from '../src/world';
 import { Providers } from '../src/providers';
 import type { WorldStore } from '../src/storage';
 import {
-  OPENROUTER_BASE,
+  OPENROUTER_BASE, OPENROUTER_DECISIONS_BASE,
   type BrowserSettings,
 } from './settings';
 
@@ -78,12 +78,11 @@ export function createBrowserWorld(settings: BrowserSettings): World {
     mode: 'live',
     host: '127.0.0.1', port: 0, db: '',
     epoch: 'browser-openrouter-1',
-    jevBase: OPENROUTER_BASE,
-    jevPath: '/chat/completions',
-    // Browser mode has no server-side adapter: any OpenAI-compatible chat
-    // model answers the Choice questions directly (strict in-catalog).
-    // Native decisions models belong to server mode (JEV_PROTOCOL=systemone).
-    jevProtocol: 'choice-chat',
+    jevBase: OPENROUTER_DECISIONS_BASE,
+    jevPath: '/decisions',
+    // Native decisions endpoint, called directly from the page (same contract
+    // as server mode; needs no server-side adapter).
+    jevProtocol: 'systemone',
     jevKey: settings.apiKey,
     jevModel: settings.decisionsModel,
     jevEvalTimeout: 30000,

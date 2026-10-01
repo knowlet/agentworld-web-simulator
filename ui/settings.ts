@@ -2,10 +2,11 @@
 // The key never leaves the browser: it is sent exclusively to openrouter.ai.
 
 export const DEFAULT_GENERATOR_MODEL = 'stealth/space-bunny-alpha';
-// NOTE (2026-10-01): `inception/mercury-decide:free` was removed upstream
-// ("Decision model not found"); the default tracks a live free model until it
-// returns. Any OpenAI-compatible chat model works here via choice-chat.
-export const DEFAULT_DECISIONS_MODEL = 'stealth/space-bunny-alpha';
+// NOTE (2026-10-01): this model flapped mid-day ("Decision model not found",
+// gone from /v1/models) and came back the same evening. If it disappears
+// again, any OpenAI-compatible chat model works here via choice-chat;
+// native decisions models need server mode (JEV_PROTOCOL=systemone).
+export const DEFAULT_DECISIONS_MODEL = 'inception/mercury-decide:free';
 export const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_DECISIONS_BASE = 'https://openrouter.ai/api/alpha';
 
