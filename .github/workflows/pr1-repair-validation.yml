@@ -37,11 +37,13 @@ jobs:
           pathlib.Path('../repair.patch').write_bytes(patch)
           subprocess.run(['git', 'apply', '--check', '--unidiff-zero', '../repair.patch'], check=True)
           subprocess.run(['git', 'apply', '--unidiff-zero', '../repair.patch'], check=True)
-          # Keep the large minified stylesheet out of the transport delta.
+          if manifest.get('followup_patch'):
+              pathlib.Path('../followup.patch').write_text(manifest['followup_patch'])
+              subprocess.run(['git', 'apply', '--check', '../followup.patch'], check=True)
+              subprocess.run(['git', 'apply', '../followup.patch'], check=True)
           css = pathlib.Path('ui/style.css')
           text = css.read_text()
-          replacements = manifest['css_replacements']
-          for old, new in replacements:
+          for old, new in manifest['css_replacements']:
               assert old in text, 'Stylesheet anchor changed'
               text = text.replace(old, new)
           css.write_text(text)
@@ -62,6 +64,27 @@ jobs:
       - name: Static, framing and cross-tab browser regressions
         working-directory: work
         run: bun run test:static
+      - name: Verify three cancellation regressions fail on the original head
+        working-directory: work
+        run: |
+          set -euo pipefail
+          git worktree add --detach ../baseline 3da3a979384a550f586fdd8abe887ef74a8451cd
+          ln -s "$PWD/node_modules" ../baseline/node_modules
+          cp tests/pr1-world-regressions.test.ts ../baseline/tests/
+          cp ui/local-store.ts ../baseline/ui/
+          set +e
+          (cd ../baseline && NO_COLOR=1 bun test tests/pr1-world-regressions.test.ts --test-name-pattern 'World creator abort|late provider completion|cancellation during retry backoff') > reports/baseline-red.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('reports/baseline-red.log').read_text()
+          for title in ['World creator abort does not fail a follower or duplicate generation', 'late provider completion after last waiter abort cannot cache', 'cancellation during retry backoff is prompt and never retries']:
+              assert '(fail) PR1 integration: ' + title in text, title
+          assert '3 fail' in text and '0 pass' in text, text
+          print('Negative control: all three selected regressions fail on the old head, and pass on the patched source.')
+          PY
       - name: Publish tested candidate only, never modify the PR branch
         working-directory: work
         run: |
