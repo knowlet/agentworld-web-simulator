@@ -1,0 +1,10 @@
+{
+  "base": "3da3a979384a550f586fdd8abe887ef74a8451cd",
+  "sha256": "6f8c60957adb99412a303efdbf4fdb4ada37c958b6535e5a45ae42c9dd67b3ad",
+  "parts": ["pr1-payload-0.b64", "pr1-payload-1.b64", "pr1-payload-2.b64", "pr1-payload-3.b64"],
+  "css_replacements": [
+    ["button,input{font:inherit}", "button,input,select{font:inherit}"],
+    ["input:focus-visible{outline:", "input:focus-visible,select:focus-visible{outline:"],
+    [".settings-panel input:not([type]){border:", ".settings-panel input:not([type]),.settings-panel select{border:"]
+  ]
+}
