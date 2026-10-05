@@ -1,38 +1,87 @@
-name: PR1 isolated repair workspace
+name: PR1 repair validation
 on:
   push:
     branches: [codex/pr1-repair-validation]
+    paths: [.github/pr1-repair-manifest.json]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  workspace:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 3da3a979384a550f586fdd8abe887ef74a8451cd
-          fetch-depth: 0
+          path: transport
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 3da3a979384a550f586fdd8abe887ef74a8451cd
+          path: work
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.2'
-      - run: bun install --frozen-lockfile
-      - name: Export pinned public source and locked test dependencies
+      - name: Verify and apply pinned repair payload
+        working-directory: work
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/pr1-workspace"
-          git bundle create "$RUNNER_TEMP/pr1-workspace/repository.bundle" HEAD
-          tar -czf "$RUNNER_TEMP/pr1-workspace/node_modules.tar.gz" node_modules
-          cp "$(command -v bun)" "$RUNNER_TEMP/pr1-workspace/bun"
-          gzip "$RUNNER_TEMP/pr1-workspace/bun"
-          git rev-parse HEAD > "$RUNNER_TEMP/pr1-workspace/HEAD.txt"
-          bun --version > "$RUNNER_TEMP/pr1-workspace/BUN_VERSION.txt"
-          cd "$RUNNER_TEMP/pr1-workspace"
-          sha256sum repository.bundle node_modules.tar.gz bun.gz > SHA256SUMS
+          test "$(git rev-parse HEAD)" = 3da3a979384a550f586fdd8abe887ef74a8451cd
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, pathlib, subprocess
+          root = pathlib.Path('../transport/.github')
+          manifest = json.loads((root / 'pr1-repair-manifest.json').read_text())
+          payload = ''.join((root / name).read_text().strip() for name in manifest['parts'])
+          patch = lzma.decompress(base64.b64decode(payload, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == manifest['sha256'], 'Repair payload digest mismatch'
+          pathlib.Path('../repair.patch').write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', '--unidiff-zero', '../repair.patch'], check=True)
+          subprocess.run(['git', 'apply', '--unidiff-zero', '../repair.patch'], check=True)
+          # Keep the large minified stylesheet out of the transport delta.
+          css = pathlib.Path('ui/style.css')
+          text = css.read_text()
+          replacements = manifest['css_replacements']
+          for old, new in replacements:
+              assert old in text, 'Stylesheet anchor changed'
+              text = text.replace(old, new)
+          css.write_text(text)
+          PY
+      - name: Install frozen dependencies and verify source
+        working-directory: work
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun run build
+          mkdir -p reports
+          bun test tests/*.test.ts 2>&1 | tee reports/repair-unit.log
+          bunx playwright install --with-deps chromium
+      - name: Real server and forced-browser regressions
+        working-directory: work
+        run: bun run test:e2e
+      - name: Static, framing and cross-tab browser regressions
+        working-directory: work
+        run: bun run test:static
+      - name: Publish tested candidate only, never modify the PR branch
+        working-directory: work
+        run: |
+          set -euo pipefail
+          git diff --check
+          git add .env.example .github/workflows/ci.yml .github/workflows/live.yml README.md package.json playwright.config.ts playwright.static.config.ts tsconfig.json src ui tests scripts/test-static-server.ts
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: close PR #1 browser protocol, cancellation, storage and framing gaps' -m 'Separate native decisions from generator models; give shared flights per-waiter cancellation; serialize browser persistence with work-owned Web Locks; reject embedded startup before credentials are read; preserve native subpath links and forward complete live endpoint configuration. Add offline unit, integration and real Chromium regressions.'
+          test "$(git rev-parse HEAD^)" = 3da3a979384a550f586fdd8abe887ef74a8451cd
+          branch="codex/pr1-validated-${GITHUB_RUN_ID}"
+          git push origin "HEAD:refs/heads/$branch"
+          git rev-parse HEAD | tee reports/validated-head.txt
+          printf 'Candidate branch: `%s`\nCandidate commit: `%s`\n' "$branch" "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: pr1-pinned-workspace
-          path: ${{ runner.temp }}/pr1-workspace/
-          retention-days: 1
-          if-no-files-found: error
+          name: pr1-repair-validation-${{ github.run_id }}
+          path: |
+            work/reports/
+            work/test-results/
+          if-no-files-found: warn
+          retention-days: 7
