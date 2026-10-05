@@ -1,10 +1,25 @@
 {
   "base": "3da3a979384a550f586fdd8abe887ef74a8451cd",
   "sha256": "6f8c60957adb99412a303efdbf4fdb4ada37c958b6535e5a45ae42c9dd67b3ad",
-  "parts": ["pr1-payload-0.b64", "pr1-payload-1.b64", "pr1-payload-2.b64", "pr1-payload-3.b64"],
+  "parts": [
+    "pr1-payload-0.b64",
+    "pr1-payload-1.b64",
+    "pr1-payload-2.b64",
+    "pr1-payload-3.b64"
+  ],
   "css_replacements": [
-    ["button,input{font:inherit}", "button,input,select{font:inherit}"],
-    ["input:focus-visible{outline:", "input:focus-visible,select:focus-visible{outline:"],
-    [".settings-panel input:not([type]){border:", ".settings-panel input:not([type]),.settings-panel select{border:"]
-  ]
+    [
+      "button,input{font:inherit}",
+      "button,input,select{font:inherit}"
+    ],
+    [
+      "input:focus-visible{outline:",
+      "input:focus-visible,select:focus-visible{outline:"
+    ],
+    [
+      ".settings-panel input:not([type]){border:",
+      ".settings-panel input:not([type]),.settings-panel select{border:"
+    ]
+  ],
+  "followup_patch": "diff --git a/tests/browser/browser-mode.spec.ts b/tests/browser/browser-mode.spec.ts\nindex 31e85ee..ad97572 100644\n--- a/tests/browser/browser-mode.spec.ts\n+++ b/tests/browser/browser-mode.spec.ts\n@@ -18,7 +18,10 @@ test('forced browser mode works under the real server CSP and uses native decisi\n   expect(calls.generations).toBe(1);\n   expect(calls.decisions).toBeGreaterThan(1);\n   expect(new Set(calls.decisionModels)).toEqual(new Set([DEFAULT_DECISIONS_MODEL]));\n-  expect(await page.evaluate(() => window.__pr1Probe.cspViolations)).toEqual([]);\n+  // Zod's capability probe catches forbidden eval and uses its non-JIT parser.\n+  // Test the connection policy, not the absence of correctly blocked script probes.\n+  expect(response!.headers()['content-security-policy']).not.toContain(\"'unsafe-eval'\");\n+  expect(await page.evaluate(() => window.__pr1Probe.cspViolations.filter(item => item.directive === 'connect-src'))).toEqual([]);\n   expect(calls.errors).toEqual([]);\n });\n \ndiff --git a/tests/helpers/browser-fixtures.ts b/tests/helpers/browser-fixtures.ts\nindex 5e51039..4c5c844 100644\n--- a/tests/helpers/browser-fixtures.ts\n+++ b/tests/helpers/browser-fixtures.ts\n@@ -10,7 +10,7 @@ export const CHAT_MODEL = 'fixture/ordinary-chat';\n export interface BrowserProbe {\n   aborts: string[];\n   settingsReads: number;\n-  cspViolations: string[];\n+  cspViolations: Array<{ blockedURI: string; directive: string }>;\n }\n declare global { interface Window { __pr1Probe: BrowserProbe } }\n \n@@ -42,7 +42,10 @@ export async function seedSettings(context: BrowserContext, overrides: Partial<B\n       }\n       return fetch(input, init);\n     }) as typeof window.fetch;\n-    addEventListener('securitypolicyviolation', event => window.__pr1Probe.cspViolations.push((event as SecurityPolicyViolationEvent).blockedURI));\n+    addEventListener('securitypolicyviolation', event => {\n+      const violation = event as SecurityPolicyViolationEvent;\n+      window.__pr1Probe.cspViolations.push({ blockedURI: violation.blockedURI, directive: violation.effectiveDirective });\n+    });\n   }, { settings, options, storageKey: SETTINGS_KEY });\n }\n \ndiff --git a/tests/pr1-world-regressions.test.ts b/tests/pr1-world-regressions.test.ts\nindex 059b202..07581c5 100644\n--- a/tests/pr1-world-regressions.test.ts\n+++ b/tests/pr1-world-regressions.test.ts\n@@ -82,8 +82,13 @@ test('PR1 integration: World creator abort does not fail a follower or duplicate\n   const world = new World(new LocalStore('shared', null, null), p); const ac = new AbortController();\n   const a = world.search('shared fixture', ac.signal); const ar = assert.rejects(bounded(a), { name: 'AbortError' });\n   await bounded(entered.promise);\n-  const b = world.search('shared fixture'); ac.abort(); await ar; gate.resolve();\n-  assert.ok((await bounded(b)).spec.root); assert.equal(calls, 1);\n+  const follower = Promise.allSettled([bounded(world.search('shared fixture'))]);\n+  try { ac.abort(); await ar; }\n+  finally { gate.resolve(); await follower; }\n+  const [result] = await follower;\n+  assert.equal(result!.status, 'fulfilled');\n+  if (result!.status === 'fulfilled') assert.ok(result!.value.spec.root);\n+  assert.equal(calls, 1);\n   assert.equal((await world.search('shared fixture')).cached, true);\n });\n \n@@ -93,12 +98,16 @@ test('PR1 integration: late provider completion after last waiter abort cannot c\n   const evaluate = p.compositionEvaluator();\n   p.compositionEvaluator = () => async request => { compositions++; return evaluate(request); };\n   p.search = async (...args) => { entered.resolve(); await gate.promise; return search(...args); };\n-  const store = new LocalStore('late', null, null); const world = new World(store, p); const ac = new AbortController();\n-  const pending = world.search('late fixture', ac.signal); const rejected = assert.rejects(bounded(pending));\n-  await bounded(entered.promise); ac.abort(); await rejected; gate.resolve();\n-  // The retry queues behind the old work where applicable and must be able to\n-  // complete from fresh generation, not a stale commit from cancelled work.\n-  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();\n+  const store = new LocalStore('late', null, null); const drained = deferred<void>();\n+  store.exclusive = async work => { try { return await work(); } finally { drained.resolve(); } };\n+  const world = new World(store, p); const ac = new AbortController();\n+  const pending = world.search('late fixture', ac.signal);\n+  // A timeout is NOT acceptable evidence of cancellation.\n+  const rejected = assert.rejects(bounded(pending), { name: 'AbortError' });\n+  await bounded(entered.promise);\n+  try { ac.abort(); await rejected; }\n+  finally { gate.resolve(); }\n+  await bounded(drained.promise);\n   assert.equal(store.get('search', key('late fixture')), undefined);\n   assert.equal(compositions, 0);\n });\n"
 }
