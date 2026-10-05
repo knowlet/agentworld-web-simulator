@@ -1,0 +1,1 @@
+Temporary validation branch only. Export the pinned PR #1 checkout and locked test dependencies; never deploy or use provider credentials.
