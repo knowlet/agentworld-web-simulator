@@ -85,20 +85,26 @@ jobs:
           assert '3 fail' in text and '0 pass' in text, text
           print('Negative control: all three selected regressions fail on the old head, and pass on the patched source.')
           PY
-      - name: Publish tested candidate only, never modify the PR branch
+      - name: Export tested source without workflow writes or PR branch changes
         working-directory: work
         run: |
           set -euo pipefail
           git diff --check
           git add .env.example .github/workflows/ci.yml .github/workflows/live.yml README.md package.json playwright.config.ts playwright.static.config.ts tsconfig.json src ui tests scripts/test-static-server.ts
+          git write-tree | tee reports/tested-tree.txt
+          # GITHUB_TOKEN lacks workflows permission. Preserve the tested workflow
+          # files in the report; the authorized repository connector applies them.
+          cp .github/workflows/ci.yml reports/tested-ci.yml
+          cp .github/workflows/live.yml reports/tested-live.yml
+          git restore --source=HEAD --staged --worktree .github/workflows/ci.yml .github/workflows/live.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix: close PR #1 browser protocol, cancellation, storage and framing gaps' -m 'Separate native decisions from generator models; give shared flights per-waiter cancellation; serialize browser persistence with work-owned Web Locks; reject embedded startup before credentials are read; preserve native subpath links and forward complete live endpoint configuration. Add offline unit, integration and real Chromium regressions.'
+          git commit -m 'fix: validated PR #1 source repairs (workflow updates follow through repository connector)'
           test "$(git rev-parse HEAD^)" = 3da3a979384a550f586fdd8abe887ef74a8451cd
           branch="codex/pr1-validated-${GITHUB_RUN_ID}"
           git push origin "HEAD:refs/heads/$branch"
           git rev-parse HEAD | tee reports/validated-head.txt
-          printf 'Candidate branch: `%s`\nCandidate commit: `%s`\n' "$branch" "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Source branch: `%s`\nSource commit: `%s`\nTested full tree: `%s`\n' "$branch" "$(git rev-parse HEAD)" "$(cat reports/tested-tree.txt)" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
