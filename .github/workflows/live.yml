@@ -18,6 +18,8 @@ jobs:
       JEV_API_KEY: ${{ secrets.JEV_API_KEY || secrets.TYPESAFE_API_KEY }}
       JEV_BASE_URL: ${{ vars.JEV_BASE_URL || 'https://api.typesafe.ai/v1' }}
       JEV_MODEL: ${{ vars.JEV_MODEL || 'jev-latest' }}
+      JEV_PATH: ${{ vars.JEV_PATH || '/systemone' }}
+      JEV_PROTOCOL: ${{ vars.JEV_PROTOCOL || 'systemone' }}
       JEV_EVALUATION_TIMEOUT_MS: ${{ vars.JEV_EVALUATION_TIMEOUT_MS || '10000' }}
       JEV_COMPOSE_TIMEOUT_MS: ${{ vars.JEV_COMPOSE_TIMEOUT_MS || '45000' }}
       JEV_COMPOSE_MAX_STEPS: ${{ vars.JEV_COMPOSE_MAX_STEPS || '4' }}

@@ -1,6 +1,8 @@
+import './settings-controls.css';
 import { useState, type FormEvent } from 'react';
+import { NATIVE_DECISION_MODELS, isNativeDecisionModel } from './decision-models';
 import {
-  DEFAULT_DECISIONS_MODEL, DEFAULT_GENERATOR_MODEL,
+  DEFAULT_GENERATOR_MODEL,
   fetchModelIds, maskKey, saveSettings, type BrowserSettings,
 } from './settings';
 
@@ -29,11 +31,17 @@ export function SettingsPanel({ open, settings, transportKind, onChange, onClose
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const saved = saveSettings(draft);
-    onChange(saved.settings);
-    setStatus(saved.persisted
-      ? '已儲存（僅存於此瀏覽器）'
-      : '已套用於本次瀏覽，但瀏覽器拒絕寫入儲存 —— 下次開啟需重填');
+    try {
+      if (!isNativeDecisionModel(draft.decisionsModel)) throw new Error('請選擇支援 native Decisions 的決策模型。');
+      const saved = saveSettings(draft);
+      setDraft(saved.settings);
+      onChange(saved.settings);
+      setStatus(saved.persisted
+        ? '已儲存（僅存於此瀏覽器）'
+        : '已套用於本次瀏覽，但瀏覽器拒絕寫入儲存 —— 下次開啟需重填');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '設定無效');
+    }
   };
   const loadModels = async () => {
     setLoadingModels(true);
@@ -76,18 +84,20 @@ export function SettingsPanel({ open, settings, transportKind, onChange, onClose
           </div>
           <div>
             <label htmlFor="setting-decisions">決策模型（Jev choices）</label>
-            <input
-              id="setting-decisions" list="aw-models" autoComplete="off" spellCheck={false}
-              placeholder={DEFAULT_DECISIONS_MODEL}
+            <select
+              id="setting-decisions"
               value={draft.decisionsModel}
               onChange={e => setDraft({ ...draft, decisionsModel: e.target.value })}
-            />
+            >
+              {!isNativeDecisionModel(draft.decisionsModel) &&
+                <option value={draft.decisionsModel} disabled>不支援的舊設定 — 請重新選擇</option>}
+              {NATIVE_DECISION_MODELS.map(id => <option key={id} value={id}>{id}</option>)}
+            </select>
           </div>
         </div>
         <datalist id="aw-models">
           <option value={DEFAULT_GENERATOR_MODEL} />
-          <option value={DEFAULT_DECISIONS_MODEL} />
-          {modelList.map(id => <option key={id} value={id} />)}
+          {modelList.filter(id => !isNativeDecisionModel(id)).map(id => <option key={id} value={id} />)}
         </datalist>
         <div className="settings-actions">
           <button type="submit">儲存</button>
@@ -96,7 +106,9 @@ export function SettingsPanel({ open, settings, transportKind, onChange, onClose
           </button>
           <button type="button" onClick={() => {
             const cleared = saveSettings({ ...draft, apiKey: '' });
-            setDraft(cleared.settings); onChange(cleared.settings); setStatus('已清除金鑰');
+            setDraft(cleared.settings); onChange(cleared.settings);
+            setStatus(cleared.persisted ? '已清除金鑰'
+              : '已清除本次瀏覽的金鑰，但瀏覽器拒絕寫入；先前儲存的金鑰仍可能在下次開啟時出現。請撤銷該金鑰或清除此網站資料。');
           }}>清除金鑰</button>
           <label className="settings-toggle">
             <input

@@ -1,14 +1,15 @@
+import { assertNativeDecisionModel, NATIVE_DECISION_MODELS, NATIVE_DECISIONS } from './decision-models';
+
 // OpenRouter browser settings, persisted per visitor in localStorage only.
 // The key never leaves the browser: it is sent exclusively to openrouter.ai.
 
 export const DEFAULT_GENERATOR_MODEL = 'stealth/space-bunny-alpha';
-// NOTE (2026-10-01): this model flapped mid-day ("Decision model not found",
-// gone from /v1/models) and came back the same evening. If it disappears
-// again, any OpenAI-compatible chat model works here via choice-chat;
-// native decisions models need server mode (JEV_PROTOCOL=systemone).
-export const DEFAULT_DECISIONS_MODEL = 'inception/mercury-decide:free';
+// Browser mode is native Decisions only. Availability failures are errors,
+// not permission to send another chat model to this endpoint. Server-side
+// choice-chat requires an explicit protocol/base/path/model/key configuration.
+export const DEFAULT_DECISIONS_MODEL = NATIVE_DECISION_MODELS[0];
 export const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
-export const OPENROUTER_DECISIONS_BASE = 'https://openrouter.ai/api/alpha';
+export const OPENROUTER_DECISIONS_BASE = NATIVE_DECISIONS.base;
 
 const LS_KEY = 'agentworld.settings.v1';
 
@@ -62,6 +63,8 @@ export function saveSettings(settings: BrowserSettings): SaveResult {
     decisionsModel: trimmed(settings.decisionsModel, DEFAULT_DECISIONS_MODEL),
     forceBrowser: settings.forceBrowser === true,
   };
+  // Clearing credentials must remain possible even for a stale model.
+  if (clean.apiKey) assertNativeDecisionModel(clean.decisionsModel);
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(clean));
     return { settings: clean, persisted: true };
@@ -78,7 +81,7 @@ export function maskKey(key: string): string {
   return `${key.slice(0, 6)}…${key.slice(-4)}`;
 }
 
-/** Public OpenRouter catalog (no auth). Used to fill the model pickers. */
+/** Public OpenRouter catalog (no auth). Used only to fill the generator picker. */
 export async function fetchModelIds(): Promise<string[]> {
   const res = await fetch(`${OPENROUTER_BASE}/models`);
   if (!res.ok) throw new Error(`OpenRouter /models responded HTTP ${res.status}`);

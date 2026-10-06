@@ -164,7 +164,7 @@ REQUEST_TIMEOUT_MS=120000
 
 ## 介面設定與瀏覽器模式（OpenRouter）
 
-頁面右上 **⚙** 可填入 **OpenRouter API key**、選擇**生成模型**與 **Jev 決策模型**（預設 `stealth/space-bunny-alpha` + `inception/mercury-decide:free`；「載入模型清單」抓 OpenRouter 公開目錄）。設定只存於該瀏覽器的 localStorage，請求只送往 `openrouter.ai`。
+頁面右上 **⚙** 可填入 **OpenRouter API key**、選擇**生成模型**與 **Jev 決策模型**（預設 `stealth/space-bunny-alpha` + `inception/mercury-decide:free`；「載入模型清單」只更新生成模型；決策模型使用明確維護的 native Decisions 支援清單）。設定只存於該瀏覽器的 localStorage，請求只送往 `openrouter.ai`。
 
 兩種模式會自動切換：
 
@@ -175,9 +175,9 @@ REQUEST_TIMEOUT_MS=120000
 
 瀏覽器模式跑同一條 pipeline：Zod 驗證 → atomic candidates → 官方 `experimental_composeSpec` → catalog 驗證 → renderer；只是 provider 改由頁端呼叫、持久層換成 `localStorage`。金鑰存在使用者瀏覽器中，公開站請自行評估（建議低額度、可隨時撤銷的金鑰）；伺服器模式完全不接觸這個金鑰。
 
-瀏覽器模式的 Jev 直接打原生 decisions endpoint（`https://openrouter.ai/api/alpha/decisions`，與 server 模式同 contract；需瀏覽器允許第三方 fetch，CSP 已放行）。若 decisions 模型暫時不可用，server 另有 `JEV_PROTOCOL=choice-chat` 可讓任何 OpenAI-compatible chat 模型代答 Choice 題（選項嚴格限定在 catalog 內，錯誤直接拒絕不 fallback）。
+瀏覽器模式的 Jev 直接打原生 decisions endpoint（`https://openrouter.ai/api/alpha/decisions`，與 server 模式同 contract；需瀏覽器允許第三方 fetch，CSP 已放行）。若 decisions 模型暫時不可用，server 另有明確設定的 `choice-chat` adapter：必須一起設定 `JEV_PROTOCOL=choice-chat`、`JEV_BASE_URL=<chat base>`、`JEV_PATH=/chat/completions`、`JEV_MODEL=<chat model>`、`JEV_API_KEY=<matching key>`，由支援所需 JSON 輸出的 chat 模型代答 Choice 題（選項嚴格限定在 catalog 內，錯誤直接拒絕不 fallback）。
 
-防嵌入：伺服器回應標頭保留 `frame-ancestors 'none'`；靜態站沒有回應標頭，改由頁面載入時嘗試破框、失敗時隱藏 ⚙ 與設定面板並顯示警告（meta CSP 的 `frame-ancestors` 瀏覽器會忽略，故不放）。
+防嵌入：伺服器回應標頭保留 `frame-ancestors 'none'`；本 repo 的 Pages 部署未設定 CSP 回應標頭；嵌入時在 App 掛載前拒絕啟動，不讀設定、不建 transport、不發模型請求，只顯示直接開啟連結。這是應用程式防護，並不等同主機層禁止 framing（meta CSP 的 `frame-ancestors` 瀏覽器會忽略，故不放）。
 
 ## GitHub Pages 部署
 
@@ -246,7 +246,7 @@ bun run test:live
 | Secret | `OPENAI_API_KEY` | generator API key |
 | Variable | `OPENAI_BASE_URL` | 例如 `https://api.deepseek.com/v1` |
 | Variable | `OPENAI_MODEL` | endpoint 真正的 DS4.1 Flash model ID |
-| Variable, optional | `JEV_BASE_URL` / `JEV_MODEL` | 預設 `https://api.typesafe.ai/v1` / `jev-latest` |
+| Variable, optional | `JEV_BASE_URL` / `JEV_PATH` / `JEV_PROTOCOL` / `JEV_MODEL` | 預設 `https://api.typesafe.ai/v1` / `/systemone` / `systemone` / `jev-latest`；必須依 provider 一起設定 |
 | Variable, optional | `OPENAI_JSON_MODE` | 預設 `json_object` |
 | Variable, optional | `OPENAI_THINKING` | generic provider 建議 `omit`；DeepSeek 可用 `disabled` |
 | Variable, optional | `JEV_*_TIMEOUT_MS` / compose limits | 調整 evaluator/composer budget |
@@ -271,3 +271,9 @@ live smoke 會驗證：Direct TypeSafe Jev world policy、OpenAI-compatible cont
 - SQLite: `bun:sqlite`
 
 唯一仍出現 pnpm 的地方，是 **json-render upstream preview archive 的 provenance**：官方 Jev 文件目前要求從其 monorepo checkout 後用 pnpm build/pack；本 repo 已把那個精確產物與 SHA256 vendoring，因此日常安裝不需要 pnpm。
+
+### Browser persistence and supported models
+
+瀏覽器決策欄位使用明確維護的 native Decisions 支援清單，與生成模型清單分離；此清單不保證上游即時可用。手動或舊設定的不相容模型會被拒絕，不會隱性切換 chat protocol。
+
+正常持久化使用每個 world namespace 一把 Web Lock，鎖涵蓋重新讀取快取、生成、site profile 與 artifact 寫入。同 namespace 的其他分頁可能需等待完整生成；這是本次最小修正的效能取捨。部署此修補後請重新整理舊分頁，舊版無鎖程式不受新鎖約束。無 Web Locks 時不進行無鎖持久化；localStorage 不可用或寫入失敗時的記憶體資料只保證當次 Store 實例存活期間可讀，不保證 reload／跨分頁一致性。

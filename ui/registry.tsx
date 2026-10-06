@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react';
 import { defineRegistry, JSONUIProvider, Renderer } from '@json-render/react';
 import type { Spec } from '@json-render/core';
 import { catalog } from '../src/catalog';
+import { absoluteFor } from './base-path';
 
 export const Navigation = createContext<(href: string) => void>(href => window.location.assign(href));
 const { registry } = defineRegistry(catalog, {
@@ -17,7 +18,7 @@ const { registry } = defineRegistry(catalog, {
       const navigate = useContext(Navigation);
       const safe = props.href.startsWith('/view?') || props.href.startsWith('/search?');
       if (!safe) return <span>{props.label}</span>;
-      return <a className="world-link" href={props.href} onClick={e => {
+      return <a className="world-link" href={absoluteFor(props.href)} onClick={e => {
         if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
           e.preventDefault(); navigate(props.href);
         }

@@ -355,7 +355,7 @@ test('browser LocalStore persists per namespace with insert-or-ignore semantics'
   a.close();
 });
 
-test('concurrent LocalStore tabs never clobber each other (per-record keys)', () => {
+test('LocalStore instances preserve different records with per-record keys', () => {
   const storage = new MemoryStorage();
   const tabA = new LocalStore('ns-shared', storage);
   const tabB = new LocalStore('ns-shared', storage);
@@ -367,30 +367,44 @@ test('concurrent LocalStore tabs never clobber each other (per-record keys)', ()
   assert.deepEqual(tabA.stats(), { page: 2, search: 1 });
 });
 
-test('aborted provider calls fail fast as cancelled instead of timing out', async () => {
-  const c = { ...loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' }), mode: 'live' as const, key: 'k' };
-  let seenAborted: boolean | undefined;
-  const p = new Providers(c, (async (_input: string | URL | Request, init?: RequestInit) => {
-    seenAborted = (init?.signal as AbortSignal | undefined)?.aborted;
-    await new Promise(r => setTimeout(r, 50));
-    (init?.signal as AbortSignal | undefined)?.throwIfAborted();
-    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{}' } }] });
-  }));
+test('provider cancellation during fetch settles before the request timeout', async () => {
+  const c = { ...config(), mode: 'live' as const, timeout: 120000, key: 'fixture-only' };
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  let calls = 0;
+  const p = new Providers(c, async (_input, init) => {
+    calls++;
+    const signal = init?.signal;
+    assert.ok(signal);
+    signal.throwIfAborted();
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      entered();
+    });
+  });
   const controller = new AbortController();
-  controller.abort();
-  await assert.rejects(p.post('openai', 'https://example.org/', 'k', {}, controller.signal), /cancelled/);
-  assert.equal(seenAborted, true);
+  const pending = p.post('openai', 'https://fixture.invalid/', 'fixture-only', {}, controller.signal);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bounded = <T,>(promise: Promise<T>) => Promise.race([promise, new Promise<T>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('cancellation watchdog expired')), 2000);
+  })]);
+  // Install the rejection handler before triggering cancellation.
+  const rejected = assert.rejects(bounded(pending), /request cancelled/);
+  try {
+    await started;
+    controller.abort();
+    await rejected;
+    assert.equal(calls, 1);
+  } finally { controller.abort(); clearTimeout(timer); }
 });
 
-test('world search threads the abort signal through policy, generation and composition', async () => {
+test('pre-aborted world search does not start policy, generation or composition', async () => {
   const c = { ...loadConfig({ APP_MODE: 'mock', WORLD_DB: ':memory:' }), mode: 'live' as const, key: 'k' };
   const abortedFlags: Array<boolean | undefined> = [];
   const providers = new Providers(c, (async (_input: string | URL | Request, init?: RequestInit) => {
     const signal = init?.signal as AbortSignal | undefined;
     abortedFlags.push(signal?.aborted);
-    await new Promise(r => setTimeout(r, 20));
-    signal?.throwIfAborted();
-    return Response.json({ answers: {} });
+    throw new Error('A pre-aborted World request must not enter the provider');
   }));
   const store = new Store(':memory:', 'abort-probe');
   const world = new World(store, providers);
@@ -398,8 +412,7 @@ test('world search threads the abort signal through policy, generation and compo
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(world.search('deep sea', controller.signal));
-    assert.ok(abortedFlags.length > 0);
-    assert.ok(abortedFlags.every(flag => flag === true));
+    assert.equal(abortedFlags.length, 0);
     assert.equal(store.stats().search, undefined);
   } finally { store.close(); }
 });

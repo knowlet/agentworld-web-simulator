@@ -9,12 +9,11 @@ import { loadSettings, type BrowserSettings } from './settings';
 import { createBrowserWorld } from './client-world';
 import { SettingsPanel } from './settings-panel';
 import './style.css';
+import { BASE, absoluteFor } from './base-path';
+import { isEmbedded } from './frame-guard';
+import { createBrowserTransport } from './browser-transport';
 
-// Injected by scripts/build.ts (BASE_PATH); falls back to the server root.
-declare const __BASE__: string;
-const BASE = typeof __BASE__ === 'string' ? __BASE__ : '/';
 const apiHref = (path: string) => BASE + path;
-const absoluteFor = (href: string) => BASE + href.replace(/^\//, '');
 
 /** Current app route (base stripped) so a GitHub Pages subpath behaves like `/`. */
 function relativePath(): string {
@@ -48,17 +47,7 @@ function serverTransport(): Transport {
 }
 
 function browserTransport(settings: BrowserSettings): Transport {
-  const world = createBrowserWorld(settings);
-  const settle = async <T,>(promise: Promise<T>, signal: AbortSignal): Promise<T> => {
-    const value = await promise;
-    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-    return value;
-  };
-  return {
-    kind: 'browser',
-    page: (url, from, ctx, signal) => settle(world.page(url, from, ctx), signal),
-    search: (query, signal) => settle(world.search(query), signal),
-  };
+  return createBrowserTransport(createBrowserWorld(settings));
 }
 
 function App() {
@@ -67,6 +56,7 @@ function App() {
   const [probe, setProbe] = useState<'probing' | 'done'>('probing');
   const [transport, setTransport] = useState<Transport | null>(null);
   const [unconfigured, setUnconfigured] = useState(false);
+  const [configurationError, setConfigurationError] = useState('');
 
   const [route, setRoute] = useState(() => relativePath() + location.search);
   const [reload, setReload] = useState(0);
@@ -76,11 +66,6 @@ function App() {
   const [error, setError] = useState('');
   const [mode, setMode] = useState('…');
   const [meta, setMeta] = useState('');
-  // Clickjacking guard: the settings panel holds the visitor's OpenRouter key,
-  // so a framed page must not offer it. Meta CSP cannot enforce
-  // frame-ancestors (browsers ignore it there); the server header covers the
-  // Bun-served page, and this bust + hide covers the static Pages build.
-  const [framed, setFramed] = useState(false);
 
   const navigate = useCallback((href: string) => {
     if (!(href === '/' || href.startsWith('/view?') || href.startsWith('/search?'))) return;
@@ -95,6 +80,7 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     setProbe('probing');
+    setConfigurationError('');
     void (async () => {
       if (!settings.forceBrowser) {
         try {
@@ -111,8 +97,15 @@ function App() {
       }
       if (cancelled) return;
       if (settings.apiKey) {
-        setTransport(browserTransport(settings));
-        setUnconfigured(false);
+        try {
+          setTransport(browserTransport(settings));
+          setUnconfigured(false);
+        } catch (error) {
+          setTransport(null);
+          setUnconfigured(false);
+          setConfigurationError(error instanceof Error ? error.message : '瀏覽器設定無效');
+          setSettingsOpen(true);
+        }
       } else {
         setTransport(null);
         setUnconfigured(true);
@@ -124,18 +117,6 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
-    let isFramed = false;
-    try {
-      isFramed = window.self !== window.top;
-    } catch {
-      isFramed = true;
-    }
-    if (isFramed) {
-      try {
-        window.top!.location.href = window.location.href;
-      } catch { /* bust blocked (e.g. sandboxed): fall through and hide key UI */ }
-      setFramed(true);
-    }
     const pop = () => { setRoute(relativePath() + location.search); setReload(n => n + 1); };
     addEventListener('popstate', pop);
     return () => removeEventListener('popstate', pop);
@@ -151,9 +132,9 @@ function App() {
     if (probe === 'probing') { setLoading(true); return () => ac.abort(); }
     if (!transport) {
       setLoading(false);
-      setError(unconfigured
+      setError(configurationError || (unconfigured
         ? '瀏覽器模式尚未設定 OpenRouter API key，無法生成內容。'
-        : '沒有可用的 world transport。');
+        : '沒有可用的 world transport。'));
       if (unconfigured) setSettingsOpen(true);
       return () => ac.abort();
     }
@@ -184,7 +165,7 @@ function App() {
       .catch(e => { if (!ac.signal.aborted) setError(e.message || 'Unable to materialize'); })
       .finally(() => { if (!ac.signal.aborted) setLoading(false); });
     return () => ac.abort();
-  }, [route, reload, transport, probe, unconfigured]);
+  }, [route, reload, transport, probe, unconfigured, configurationError]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault(); const value = input.trim(); if (!value) return;
@@ -204,13 +185,13 @@ function App() {
         <button className="wordmark" onClick={() => navigate('/')}>◈ AgentWorld</button>
         <span className="topline-right">
           <span className={`mode ${mode === 'mock' ? 'mock' : ''}`}>{badge}</span>
-          {!framed && <button
+          <button
             className={`gear ${settingsOpen ? 'active' : ''}`}
             title="OpenRouter settings"
             aria-label="OpenRouter settings"
             aria-expanded={settingsOpen}
             onClick={() => setSettingsOpen(open => !open)}
-          >⚙</button>}
+          >⚙</button>
         </span>
       </div>
       <div className="toolbar">
@@ -224,7 +205,7 @@ function App() {
         </form>
       </div>
       <SettingsPanel
-        open={settingsOpen && !framed}
+        open={settingsOpen}
         settings={settings}
         transportKind={transport?.kind ?? null}
         onChange={next => setSettings(next)}
@@ -232,8 +213,8 @@ function App() {
       />
     </header>
     <div className="disclaimer">FICTIONAL INTERNET — generated observations, not real websites or verified facts.</div>
-    {framed && <div className="disclaimer framed-warning" role="alert">此頁面被嵌入於 iframe，已停用 OpenRouter 設定以保護你的 API key。請在新分頁直接開啟使用。</div>}
     <main>
+      {route === '/' && configurationError && <p role="alert">{configurationError}</p>}
       {route === '/' && <section className="welcome">
         <span className="eyebrow">JEV × JSON-RENDER × YOUR LLM</span>
         <h1>An internet that<br />materializes as you explore.</h1>
@@ -266,4 +247,12 @@ function App() {
   </Navigation.Provider>;
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+// This guard runs BEFORE App mounts, so hooks cannot read saved credentials
+// or start health probes / provider calls in an embedded document.
+// UI-only frame hiding is deliberately not used as the enforcement boundary.
+createRoot(document.getElementById('root')!).render(isEmbedded(window)
+  ? <main role="alert" data-testid="embedded-blocked">
+      <p>嵌入模式已停用：不讀取金鑰、不建立 world、不發出模型請求。</p>
+      <a href={location.href} target="_blank" rel="noopener noreferrer">在新分頁直接開啟</a>
+    </main>
+  : <App />);

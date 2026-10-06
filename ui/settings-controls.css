@@ -1,0 +1,5 @@
+.settings-panel select {
+  width: 100%; min-height: 2.5rem; padding: .55rem .65rem;
+  border: 1px solid currentColor; border-radius: .35rem;
+  background: inherit; color: inherit; font: inherit;
+}
