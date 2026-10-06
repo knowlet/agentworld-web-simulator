@@ -32,6 +32,9 @@ jobs:
         run: bunx playwright install --with-deps chromium
       - name: Browser navigation tests
         run: bun run test:e2e
+      # Runs after root-mode E2E: its production build uses a different BASE_PATH.
+      - name: Static browser mode regressions (mocked OpenRouter, no secrets)
+        run: bunx playwright test --config=playwright.pr1.config.ts
       - name: Upload reports and Bun reproducibility lock
         if: always()
         uses: actions/upload-artifact@v4
