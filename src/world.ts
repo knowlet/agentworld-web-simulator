@@ -80,11 +80,18 @@ export class World {
       const mock = this.providers.config.mode === 'mock';
       const policy = await this.providers.searchPolicy(query, taskSignal);
       taskSignal?.throwIfAborted();
+      // Keep the full query as the observation identity, but fit mock labels
+      // within the tighter generated-document limits (including suffixes).
+      const labelQuery = query.length > 171
+        ? `${query.slice(0, 170).replace(/[\uD800-\uDBFF]$/, '')}…` : query;
+      const encodedQuery = mock ? encodeURIComponent(query) : '';
+      // A separate path segment prevents collision with a literal digest query.
+      const slug = encodedQuery.length > 1800 ? `_sha256/${key(query)}` : encodedQuery;
       const draft = mock ? {
         results: ['atlas', 'journal', 'forum', 'archive', 'guide', 'lab'].map((host, i) => ({
-          title: `${query} — ${host}`, url: `https://${host}.simulated.test/topics/${encodeURIComponent(query)}-${i}`,
+          title: `${labelQuery} — ${host}`, url: `https://${host}.simulated.test/topics/${slug}-${i}`,
           snippet: `MOCK result ${i + 1}: a fictional entry about ${query}.`,
-        })), related: [`${query} history`, `${query} examples`],
+        })), related: [`${labelQuery} history`, `${labelQuery} examples`],
       } : await this.providers.search(query, policy.intent, taskSignal);
       taskSignal?.throwIfAborted();
       const document: SearchDocument = { ...normalizeSearch(draft), query, policy };
