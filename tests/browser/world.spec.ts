@@ -37,3 +37,28 @@ test('direct URL and API errors are visible, not silently replaced', async ({ pa
   await expect(page.getByRole('alert')).toContainText('Invalid simulated URL');
   await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
 });
+
+test('undecodable percent path supports direct navigation, explore, back and reload', async ({ page }) => {
+  const errors: string[] = []; const external: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== 'http://127.0.0.1:4173') { external.push(url.href); return route.abort(); }
+    return route.continue();
+  });
+  await page.goto('/');
+  await page.getByRole('textbox', { name: 'Search or URL' }).fill('https://fixture.example/%FF');
+  await page.getByRole('button', { name: 'Go', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('%FF');
+  const firstUrl = page.url();
+  await page.getByRole('link', { name: /Explore topic 1/ }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Explore topic 1');
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page).toHaveURL(firstUrl);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('%FF');
+  await expect(page.getByText(/Cached observation/)).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('%FF');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(errors).toEqual([]); expect(external).toEqual([]);
+});

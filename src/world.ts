@@ -9,6 +9,13 @@ interface PageArtifact { document: Page; spec: Spec; composition: CompositionInf
 interface SearchArtifact { document: SearchDocument; spec: Spec; composition: CompositionInfo }
 interface CachedResult<T> { data: T; cached: boolean; mode: 'live' | 'mock'; generation: 'openai' | 'mock'; elapsedMs: number }
 
+function decodeMockTitle(segment: string): string {
+  // URL parsing permits percent sequences that are not valid UTF-8. They are
+  // still usable navigation targets; keep their encoded display text intact.
+  try { return decodeURIComponent(segment); }
+  catch { return segment; }
+}
+
 export class World {
   private flights = new SharedFlights();
   private siteTails = new Map<string, Promise<unknown>>();
@@ -50,7 +57,7 @@ export class World {
         const policy: Policy = await this.providers.pagePolicy(context, taskSignal);
         taskSignal?.throwIfAborted();
         const draft = mock ? {
-          title: ctx || decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || host),
+          title: ctx || decodeMockTitle(new URL(url).pathname.split('/').filter(Boolean).pop() || host),
           siteName: host, summary: `A fictional observation at ${url}.`, imageAlt: 'Simulated scene — no external image loaded',
           sections: [
             { heading: 'Overview', kind: 'text' as const, body: `This is a deterministic MOCK fixture for ${url}. No external model has been called.` },
