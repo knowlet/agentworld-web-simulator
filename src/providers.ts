@@ -168,7 +168,30 @@ export class Providers {
         await res.body?.cancel();
         throw new ProviderError('jev', `HTTP ${res.status}`);
       }
-      const parsed = systemOneResponse.safeParse(await res.json().catch(() => null));
+      // Match the generator path's byte cap before parsing provider JSON.
+      // Content-Length may be absent or inaccurate, so count streamed bytes.
+      if (!res.body) throw new ProviderError('jev', 'invalid System One response');
+      const reader = res.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 2_000_000) {
+            await reader.cancel();
+            throw new ProviderError('jev', 'response too large');
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      let data: unknown;
+      try { data = JSON.parse(UTF8.decode(concatBytes(chunks))); }
+      catch { throw new ProviderError('jev', 'invalid System One response'); }
+      const parsed = systemOneResponse.safeParse(data);
       if (!parsed.success) throw new ProviderError('jev', 'invalid System One response');
       const answers: Experimental_CompositionEvaluation['answers'] = {};
       for (const [name, question] of Object.entries(request.questions)) {
