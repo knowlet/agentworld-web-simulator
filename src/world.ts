@@ -9,6 +9,38 @@ interface PageArtifact { document: Page; spec: Spec; composition: CompositionInf
 interface SearchArtifact { document: SearchDocument; spec: Spec; composition: CompositionInfo }
 interface CachedResult<T> { data: T; cached: boolean; mode: 'live' | 'mock'; generation: 'openai' | 'mock'; elapsedMs: number }
 
+const MOCK_RESULT_HOSTS = ['atlas', 'journal', 'forum', 'archive', 'guide', 'lab'] as const;
+// Zod `$ZodCheckMaxLength` compares `input.length` (UTF-16 code units). These
+// are the documented maxima a literal mock URL is copied into. Percent-encoded
+// length is not one of them: 200 "查" encode to 1800 ASCII units and still
+// make `https://journal.simulated.test/topics/…` longer than the 600-unit summary.
+const MAX_RESULT_URL = 2048;
+const MAX_PAGE_TITLE = 200;
+const MAX_PAGE_SUMMARY = 600;
+const PAGE_SUMMARY_PREFIX = 'A fictional observation at ';
+const PAGE_SUMMARY_SUFFIX = '.';
+const MAX_LITERAL_RESULT_URL = Math.min(
+  MAX_RESULT_URL,
+  MAX_PAGE_SUMMARY - PAGE_SUMMARY_PREFIX.length - PAGE_SUMMARY_SUFFIX.length,
+  MAX_RESULT_URL - '/topic-4'.length,
+);
+
+function bounded(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const sliced = value.slice(0, max).replace(/[\uD800-\uDBFF]$/, '');
+  return sliced || value.slice(0, 1);
+}
+
+function literalResultSlug(query: string): string | undefined {
+  const encoded = encodeURIComponent(query);
+  for (let i = 0; i < MOCK_RESULT_HOSTS.length; i++) {
+    const url = `https://${MOCK_RESULT_HOSTS[i]}.simulated.test/topics/${encoded}-${i}`;
+    // Measure the URL string schemas store. Do not compare percent-encoded length.
+    if (url.length > MAX_LITERAL_RESULT_URL) return undefined;
+  }
+  return encoded;
+}
+
 export class World {
   private flights = new SharedFlights();
   private siteTails = new Map<string, Promise<unknown>>();
@@ -50,8 +82,8 @@ export class World {
         const policy: Policy = await this.providers.pagePolicy(context, taskSignal);
         taskSignal?.throwIfAborted();
         const draft = mock ? {
-          title: ctx || decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || host),
-          siteName: host, summary: `A fictional observation at ${url}.`, imageAlt: 'Simulated scene — no external image loaded',
+          title: bounded(ctx || decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || host), MAX_PAGE_TITLE),
+          siteName: host, summary: bounded(`A fictional observation at ${url}.`, MAX_PAGE_SUMMARY), imageAlt: 'Simulated scene — no external image loaded',
           sections: [
             { heading: 'Overview', kind: 'text' as const, body: `This is a deterministic MOCK fixture for ${url}. No external model has been called.` },
             { heading: 'Explore this world', kind: 'text' as const, body: previous || 'Every link stays inside the simulator and materializes another fictional page.' },
@@ -84,9 +116,11 @@ export class World {
       // within the tighter generated-document limits (including suffixes).
       const labelQuery = query.length > 171
         ? `${query.slice(0, 170).replace(/[\uD800-\uDBFF]$/, '')}…` : query;
-      const encodedQuery = mock ? encodeURIComponent(query) : '';
       // A separate path segment prevents collision with a literal digest query.
-      const slug = encodedQuery.length > 1800 ? `_sha256/${key(query)}` : encodedQuery;
+      // Literal slugs are kept only when the stored URL's UTF-16 length fits
+      // every documented field that will contain it. Over-long valid queries
+      // still succeed via the hash path; they are not input errors.
+      const slug = mock ? (literalResultSlug(query) ?? `_sha256/${key(query)}`) : '';
       const draft = mock ? {
         results: ['atlas', 'journal', 'forum', 'archive', 'guide', 'lab'].map((host, i) => ({
           title: `${labelQuery} — ${host}`, url: `https://${host}.simulated.test/topics/${slug}-${i}`,
