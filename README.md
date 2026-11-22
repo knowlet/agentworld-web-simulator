@@ -265,7 +265,7 @@ live smoke 會驗證：Direct TypeSafe Jev world policy、OpenAI-compatible cont
 此 repo 的正常開發與 CI 不需要 Node/npm/pnpm：
 
 - runtime/server: `Bun.serve()`
-- package manager / lockfile: `bun install` + `bun.lock`
+- package manager: `bun install`. Committed lockfile: `package-lock.json` (npm lockfile version 3). When `bun.lock` is absent, Bun 1.4.2 migrates that file during install. Do not commit `bun.lock`.
 - frontend build: `Bun.build()`
 - tests: `bun test`
 - SQLite: `bun:sqlite`

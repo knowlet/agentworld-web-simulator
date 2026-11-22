@@ -1,8 +1,9 @@
 version: 2
 updates:
-  - package-ecosystem: "bun"
+  - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
-    # Keep existing security updates; do not add routine version-update PRs.
-    open-pull-requests-limit: 0
+    # Version updates stop at 0. Security updates use a separate fixed limit
+    # and are available for npm's package-lock.json, which this repo commits.
+    open-pull-requests-limit: 5

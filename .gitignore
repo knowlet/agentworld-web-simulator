@@ -1,4 +1,7 @@
 node_modules/
+# bun install migrates package-lock.json and writes this locally. It is not
+# the lockfile Dependabot updates; committing it would hide package-lock.json.
+bun.lock
 dist/
 data/
 reports/
