@@ -153,3 +153,19 @@ test('HTTP search accepts valid long queries and rejects over-limit input', asyn
     assert.equal(store.stats().search, 5);
   } finally { store.close(); }
 });
+
+test('following a truncated related search never links back to itself', async () => {
+  const { store, world } = harness();
+  try {
+    let query = 'x'.repeat(172);
+    for (let hop = 0; hop < 3; hop++) {
+      const result = await world.search(query);
+      assert.ok(result.data.related.length >= 1);
+      assert.ok(!result.data.related.includes(query), `hop ${hop} links to itself`);
+      query = result.data.related[0]!;
+    }
+  } finally {
+    store.close();
+  }
+});
+

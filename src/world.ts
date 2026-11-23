@@ -125,7 +125,11 @@ export class World {
         results: ['atlas', 'journal', 'forum', 'archive', 'guide', 'lab'].map((host, i) => ({
           title: `${labelQuery} — ${host}`, url: `https://${host}.simulated.test/topics/${slug}-${i}`,
           snippet: `MOCK result ${i + 1}: a fictional entry about ${query}.`,
-        })), related: [`${labelQuery} history`, `${labelQuery} examples`],
+        // A truncated label can reproduce the current query (following
+        // "<170 chars>… history" yields the same label again); never link a
+        // search page back to itself.
+        })), related: [`${labelQuery} history`, `${labelQuery} examples`]
+          .filter(suggestion => suggestion.trim().replace(/\s+/g, ' ') !== query),
       } : await this.providers.search(query, policy.intent, taskSignal);
       taskSignal?.throwIfAborted();
       const document: SearchDocument = { ...normalizeSearch(draft), query, policy };
