@@ -119,7 +119,7 @@ Reload／重訪同一 observation 不會重新呼叫 generator 或 Jev。`WORLD_
 ```bash
 git clone https://github.com/knowlet/agentworld-web-simulator.git
 cd agentworld-web-simulator
-bun install
+rm -f bun.lock && bun install --frozen-lockfile
 cp .env.example .env
 bun run build
 bun run start
@@ -265,7 +265,7 @@ live smoke 會驗證：Direct TypeSafe Jev world policy、OpenAI-compatible cont
 此 repo 的正常開發與 CI 不需要 Node/npm/pnpm：
 
 - runtime/server: `Bun.serve()`
-- package manager / lockfile: `bun install` + `bun.lock`
+- package manager: Bun, installing from the committed `package-lock.json` (npm lockfile version 3), the file Dependabot updates. Install with `rm -f bun.lock && bun install --frozen-lockfile`, as CI does. A plain `bun install` writes a local `bun.lock`, and later installs prefer it over `package-lock.json`, so a lockfile-only Dependabot fix could be skipped locally; `--frozen-lockfile` does not write one. Do not commit `bun.lock`.
 - frontend build: `Bun.build()`
 - tests: `bun test`
 - SQLite: `bun:sqlite`
