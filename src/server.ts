@@ -63,8 +63,22 @@ export function createApp(world: World) {
         try {
           const input = await parseJsonBody(req);
           if (url.pathname === '/api/search') {
-            const q = searchInput.parse(input);
-            return json(200, await world.search(q.query, req.signal));
+            const parsed = searchInput.safeParse(input);
+            if (!parsed.success) {
+              const queryLength = parsed.error.issues.some(issue =>
+                issue.path[0] === 'query' && (issue.code === 'too_big' || issue.code === 'too_small'));
+              throw new HttpError(400, queryLength
+                ? 'Search must contain 1–500 characters'
+                : 'Invalid request or generated document');
+            }
+            try {
+              return json(200, await world.search(parsed.data.query, req.signal));
+            } catch (error) {
+              if (error instanceof Error && error.message === 'Search must contain 1–500 characters') {
+                throw new HttpError(400, error.message);
+              }
+              throw error;
+            }
           }
           const p = pageInput.parse(input);
           try { canonicalUrl(p.url); if (p.from) canonicalUrl(p.from); }
