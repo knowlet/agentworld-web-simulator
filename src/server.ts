@@ -29,9 +29,25 @@ async function parseJsonBody(req: Request): Promise<unknown> {
   if (!req.headers.get('content-type')?.startsWith('application/json')) throw new HttpError(415, 'Use application/json');
   const declared = Number(req.headers.get('content-length') || '0');
   if (Number.isFinite(declared) && declared > 16384) throw new HttpError(413, 'Request too large');
-  const bytes = await req.arrayBuffer();
-  if (bytes.byteLength > 16384) throw new HttpError(413, 'Request too large');
-  try { return JSON.parse(new TextDecoder().decode(bytes)); }
+  const bytes = new Uint8Array(16384);
+  let size = 0;
+  const reader = req.body?.getReader();
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value.byteLength > bytes.byteLength - size) {
+          // Cancellation must not delay rejection or replace the 413 if it fails.
+          void reader.cancel().catch(() => {});
+          throw new HttpError(413, 'Request too large');
+        }
+        bytes.set(value, size);
+        size += value.byteLength;
+      }
+    } finally { reader.releaseLock(); }
+  }
+  try { return JSON.parse(new TextDecoder().decode(bytes.subarray(0, size))); }
   catch { throw new HttpError(400, 'Invalid JSON'); }
 }
 
